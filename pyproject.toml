@@ -6,4 +6,15 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "datasets>=5.0.0",
+    "matplotlib>=3.11.1",
+    "pandas>=3.0.5",
+    "pillow>=12.3.0",
+    "pyarrow>=25.0.0",
+    "requests>=2.34.2",
+    "scikit-learn>=1.9.0",
+    "tensorboard>=2.21.0",
+    "timm>=1.0.28",
+    "torch>=2.13.0",
+    "torchvision>=0.28.0",
+    "tqdm>=4.69.0",
 ]
