@@ -29,6 +29,7 @@ def make_loader(parquet_path, config, transform, shuffle):
 
 if __name__ == "__main__":
     import matplotlib
+    import os
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
     import numpy as np
@@ -50,6 +51,7 @@ if __name__ == "__main__":
             ax.imshow(img)
         ax.axis("off")
     figure.tight_layout()
-    figure.savefig("augmented_samples.png", dpi=150)
+    os.makedirs("runs", exist_ok=True)
+    figure.savefig("runs/augmented_samples.png", dpi=150)
     plt.close(figure)
-    print(f"Saved augmented_samples.png with {n} images")
+    print(f"Saved runs/augmented_samples.png with {n} images")
