@@ -64,7 +64,7 @@ def run(config):
         if metrics["map"] > best: best = metrics["map"]; save_checkpoint(config.checkpoint_dir / "best.pt", state)
         if config.save_epochs > 0 and (epoch + 1) % config.save_epochs == 0:
             save_checkpoint(config.checkpoint_dir / f"epoch-{epoch + 1}.pt", state)
-        print_metrics(metrics, tag_to_id, f"Epoch {epoch + 1}/{config.epochs}")
+        print_metrics(metrics, tag_to_id, f"Epoch {epoch + 1}/{config.epochs}", extra={"Train loss": total / len(train), "Val loss": sum(losses) / len(losses), "LR": optimizer.param_groups[0]["lr"]}, show_per_tag=False)
         if wandb_run: wandb_run.log(row)
     if wandb_run: wandb_run.finish()
 
