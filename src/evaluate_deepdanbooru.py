@@ -25,7 +25,7 @@ def main():
     parser.add_argument("--checkpoint", type=Path, default=Path("models/deepdanbooru/model-resnet_custom_v3.pt"))
     parser.add_argument("--val-parquet", type=Path, default=TrainConfig().val_parquet)
     parser.add_argument("--tag-to-id", type=Path, default=TrainConfig().tag_to_id)
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--num-workers", type=int, default=4)
     args = parser.parse_args()
 
@@ -43,7 +43,6 @@ def main():
     model = DeepDanbooruModel()
     model.load_state_dict(state)
     model.eval()
-    model.half()
 
     dev = device()
     model.to(dev)
@@ -90,10 +89,10 @@ def main():
             batch_labels.append(labels)
 
         batch_np = np.stack(batch_images, axis=0)
-        batch_t = torch.from_numpy(batch_np).to(dev).half()
+        batch_t = torch.from_numpy(batch_np).to(dev)
 
-        with torch.no_grad(), torch.autocast(str(dev)):
-            dd_scores = model(batch_t).float().cpu().numpy()
+        with torch.no_grad():
+            dd_scores = model(batch_t).cpu().numpy()
 
         for b in range(len(batch)):
             our_scores = torch.zeros(len(tag_to_id), dtype=torch.float32)
