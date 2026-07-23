@@ -23,7 +23,7 @@ class ResizeAndPad:
 
 
 def train_transforms(image_size):
-    return transforms.Compose([ResizeAndPad(image_size), transforms.RandomCrop(image_size), transforms.RandomHorizontalFlip(), transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.05, hue=0.02), transforms.ToTensor(), transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
+    return transforms.Compose([ResizeAndPad(image_size + 16), transforms.RandomCrop(image_size), transforms.RandomHorizontalFlip(), transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.05, hue=0.02), transforms.ToTensor(), transforms.Normalize(IMAGENET_MEAN, IMAGENET_STD)])
 
 
 def val_transforms(image_size):
