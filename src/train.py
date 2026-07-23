@@ -13,7 +13,7 @@ from tqdm import tqdm
 from .config import TrainConfig
 from .dataset import make_loader
 from .losses import build_loss
-from .metrics import multilabel_metrics
+from .metrics import multilabel_metrics, print_metrics
 from .model import ImageTagger
 from .transforms import train_transforms, val_transforms
 from .utils import device, save_checkpoint, seed_everything, load_json
@@ -64,7 +64,7 @@ def run(config):
         if metrics["map"] > best: best = metrics["map"]; save_checkpoint(config.checkpoint_dir / "best.pt", state)
         if config.save_epochs > 0 and (epoch + 1) % config.save_epochs == 0:
             save_checkpoint(config.checkpoint_dir / f"epoch-{epoch + 1}.pt", state)
-        print(row)
+        print_metrics(metrics, tag_to_id, f"Epoch {epoch + 1}/{config.epochs}")
         if wandb_run: wandb_run.log(row)
     if wandb_run: wandb_run.finish()
 

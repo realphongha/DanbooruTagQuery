@@ -8,7 +8,7 @@ from PIL import Image
 from tqdm import tqdm
 
 from .config import TrainConfig
-from .metrics import multilabel_metrics
+from .metrics import multilabel_metrics, print_metrics
 from .utils import device, load_json
 
 try:
@@ -35,7 +35,7 @@ def main():
 
     # Load TorchDeepDanbooru
     print(f"Loading checkpoint from {args.checkpoint} ...")
-    state = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+    state = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     dd_tags = state.get("tags", [])
     print(f"  {len(dd_tags)} tags")
     dd_tag_to_id = {tag: i for i, tag in enumerate(dd_tags)}
@@ -104,25 +104,7 @@ def main():
     preds_tensor = torch.stack(predictions)
     targets_tensor = torch.stack(targets)
     metrics = multilabel_metrics(preds_tensor, targets_tensor)
-
-    print("\n========================================")
-    print("  TorchDeepDanbooru Evaluation Results")
-    print("========================================")
-    print(f"  mAP            : {metrics['map']:.4f}")
-    print(f"  Macro F1       : {metrics['macro_f1']:.4f}")
-    print(f"  Best threshold : {metrics['best_threshold']:.2f}")
-    print(f"  Micro F1       : {metrics['micro_f1']:.4f}")
-    print("----------------------------------------")
-    print("  Per-tag AP:")
-    sorted_tags = sorted(tag_to_id.keys(), key=lambda t: tag_to_id[t])
-    for tag in sorted_tags:
-        tid = tag_to_id[tag]
-        ap = metrics["per_tag_ap"].get(tid, float("nan"))
-        marker = " *" if tid not in dd_to_our.values() else ""
-        if not np.isnan(ap):
-            print(f"    {tag:<30s} {ap:.4f}{marker}")
-    print("========================================")
-
+    print_metrics(metrics, tag_to_id, "TorchDeepDanbooru Evaluation Results")
     return metrics
 
 
