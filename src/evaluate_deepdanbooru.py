@@ -103,8 +103,9 @@ def main():
 
     preds_tensor = torch.stack(predictions)
     targets_tensor = torch.stack(targets)
+    tag_counts = {tid: int(targets_tensor[:, tid].sum().item()) for tid in range(len(tag_to_id))}
     metrics = multilabel_metrics(preds_tensor, targets_tensor)
-    print_metrics(metrics, tag_to_id, "TorchDeepDanbooru Evaluation Results")
+    print_metrics(metrics, tag_to_id, "TorchDeepDanbooru Evaluation Results", tag_counts=tag_counts)
     return metrics
 
 

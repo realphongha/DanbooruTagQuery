@@ -13,7 +13,7 @@ def multilabel_metrics(probabilities, targets):
     return {"map": map_score, "macro_f1": best_f1, "best_threshold": best_threshold, "micro_f1": float(f1_score(targets, probabilities >= best_threshold, average="micro", zero_division=0)), "per_tag_ap": per_tag}
 
 
-def print_metrics(metrics, tag_to_id, title="Evaluation Results", extra=None, show_per_tag=True):
+def print_metrics(metrics, tag_to_id, title="Evaluation Results", extra=None, show_per_tag=True, tag_counts=None):
     print(f"\n{'=' * 40}")
     print(f"  {title}")
     print(f"{'=' * 40}")
@@ -36,5 +36,6 @@ def print_metrics(metrics, tag_to_id, title="Evaluation Results", extra=None, sh
             tid = tag_to_id[tag]
             ap = metrics["per_tag_ap"].get(tid, float("nan"))
             if not np.isnan(ap):
-                print(f"    {tag:<30s} {ap:.4f}")
+                count_str = f"  #{tag_counts[tid]}" if tag_counts and tid in tag_counts else ""
+                print(f"    {tag:<30s} {ap:.4f}{count_str}")
     print(f"{'=' * 40}")
