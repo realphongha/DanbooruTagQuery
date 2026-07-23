@@ -1,4 +1,5 @@
 # Project
+models/
 runs/*
 wandb/
 *.parquet
