@@ -1,6 +1,7 @@
 import argparse
 import csv
 import os
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -19,21 +20,29 @@ if not _DANBOORU_USER or not _DANBOORU_API_KEY:
     print("Get your API key at: https://danbooru.donmai.us/profile")
     exit(1)
 
-_SESSION = requests.Session()
-_SESSION.auth = (_DANBOORU_USER, _DANBOORU_API_KEY)
-_SESSION.headers.update({
-    "User-Agent": f"DanbooruTagCLIP/1.0 (by {_DANBOORU_USER} on Danbooru)",
-    "Referer": "https://danbooru.donmai.us/",
-})
+_session_local = threading.local()
+
+
+def _get_session():
+    if not hasattr(_session_local, "session"):
+        session = requests.Session()
+        session.auth = (_DANBOORU_USER, _DANBOORU_API_KEY)
+        session.headers.update({
+            "User-Agent": f"DanbooruTagCLIP/1.0 (by {_DANBOORU_USER} on Danbooru)",
+            "Referer": "https://danbooru.donmai.us/",
+        })
+        _session_local.session = session
+    return _session_local.session
 
 
 def download_one(row, output_dir, retries):
     suffix = Path(urlparse(row.image_url).path).suffix.lower() or ".jpg"
     path = output_dir / f"{int(row.id)}{suffix}"
     if path.exists() and path.stat().st_size > 0: return "skipped", row.id, row.image_url, ""
+    session = _get_session()
     for attempt in range(retries + 1):
         try:
-            response = _SESSION.get(row.image_url, timeout=(5, 30))
+            response = session.get(row.image_url, timeout=(5, 30))
             if response.status_code == 200 and response.content:
                 temporary = path.with_suffix(path.suffix + ".part")
                 temporary.write_bytes(response.content)

@@ -25,5 +25,5 @@ class ImageTagger(nn.Module):
         tokens = self.backbone.forward_features(images)
         return self.head(tokens)
 
-    def encode(self, images):
+    def extract_features(self, images):
         return self.backbone.forward_features(images)
