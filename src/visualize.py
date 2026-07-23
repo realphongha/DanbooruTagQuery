@@ -1,8 +1,10 @@
 import argparse
 import math
 import random
-import torch
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+import torch
 from PIL import Image
 from .config import TrainConfig
 from .dataset import DanbooruDataset
