@@ -22,7 +22,7 @@ from .utils import device, save_checkpoint, seed_everything, load_json
 class EMA:
     def __init__(self, model, decay=0.999):
         self.decay = decay
-        self.shadow = {n: p.data.clone() for n, p in model.named_parameters() if p.requires_grad}
+        self.shadow = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
         self.backup = {}
 
     def update(self, model):
@@ -34,7 +34,7 @@ class EMA:
     def apply(self, model):
         for n, p in model.named_parameters():
             if p.requires_grad:
-                self.backup[n] = p.data.clone()
+                self.backup[n] = p.detach().clone()
                 p.data = self.shadow[n]
 
     def restore(self, model):
@@ -95,7 +95,7 @@ def run(config):
         if metrics["map"] > best:
             best = metrics["map"]
             ema.apply(model)
-            state["model"] = model.state_dict()
+            state["model"] = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             ema.restore(model)
             save_checkpoint(config.checkpoint_dir / "best.pt", state)
         if config.save_epochs > 0 and (epoch + 1) % config.save_epochs == 0:
