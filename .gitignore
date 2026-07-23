@@ -1,6 +1,7 @@
 # Project
 *.parquet
 data/*
+failed_downloads.csv
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
