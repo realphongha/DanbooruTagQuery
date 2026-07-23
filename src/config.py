@@ -22,6 +22,8 @@ class TrainConfig:
     download_workers: int = 32
     download_retries: int = 3
     save_epochs: int = 1
+    backbone_lr_mult: float = 0.1
+    ema_decay: float = 0.999
 
     def to_dict(self):
         return {key: str(value) if isinstance(value, Path) else value for key, value in asdict(self).items()}
