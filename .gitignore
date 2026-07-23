@@ -1,4 +1,6 @@
 # Project
+runs/*
+wandb/
 *.parquet
 data/*
 failed_downloads.csv

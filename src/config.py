@@ -22,6 +22,7 @@ class TrainConfig:
     prefetch_factor: int = 4
     download_workers: int = 32
     download_retries: int = 3
+    save_epochs: int = 1
 
     def to_dict(self):
         return {key: str(value) if isinstance(value, Path) else value for key, value in asdict(self).items()}
