@@ -4,13 +4,14 @@ from sklearn.metrics import average_precision_score, f1_score
 
 def multilabel_metrics(probabilities, targets):
     probabilities = np.asarray(probabilities); targets = np.asarray(targets).astype(int)
-    per_tag = {index: float(average_precision_score(targets[:, index], probabilities[:, index])) if targets[:, index].any() else float("nan") for index in range(targets.shape[1])}
-    map_score = float(np.nanmean(list(per_tag.values())))
+    ap_per_tag = average_precision_score(targets, probabilities, average=None)
+    ap_per_tag = np.where(targets.any(axis=0), ap_per_tag, np.nan)
+    map_score = float(np.nanmean(ap_per_tag))
     best_f1, best_threshold = 0.0, 0.5
     for threshold in np.arange(0.1, 1.0, 0.05):
         f1 = f1_score(targets, probabilities >= threshold, average="macro", zero_division=0)
         if f1 > best_f1: best_f1, best_threshold = f1, threshold
-    return {"map": map_score, "macro_f1": best_f1, "best_threshold": best_threshold, "micro_f1": float(f1_score(targets, probabilities >= best_threshold, average="micro", zero_division=0)), "per_tag_ap": per_tag}
+    return {"map": map_score, "macro_f1": best_f1, "best_threshold": best_threshold, "micro_f1": float(f1_score(targets, probabilities >= best_threshold, average="micro", zero_division=0))}
 
 
 def print_metrics(metrics, tag_to_id, title="Evaluation Results", extra=None, show_per_tag=True, tag_counts=None):
@@ -34,7 +35,7 @@ def print_metrics(metrics, tag_to_id, title="Evaluation Results", extra=None, sh
         sorted_tags = sorted(tag_to_id.keys(), key=lambda t: tag_to_id[t])
         for tag in sorted_tags:
             tid = tag_to_id[tag]
-            ap = metrics["per_tag_ap"].get(tid, float("nan"))
+            ap = metrics.get("per_tag_ap", {}).get(tid, float("nan"))
             if not np.isnan(ap):
                 count_str = f"  #{tag_counts[tid]}" if tag_counts and tid in tag_counts else ""
                 print(f"    {tag:<30s} {ap:.4f}{count_str}")
