@@ -58,6 +58,7 @@ def run(config):
     if config.head_type == "tag_query_head" and config.use_siglip_init:
         if SiglipModel is None:
             raise RuntimeError("transformers is required for SigLIP tag query initialization")
+        print("Initializing tag query head with SigLIP...")
         tags_sorted = sorted(tag_to_id, key=tag_to_id.get)
         texts = [t.replace("_", " ") for t in tags_sorted]
 
@@ -67,7 +68,7 @@ def run(config):
         inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
         inputs = {k: v.to(dev) for k, v in inputs.items()}
         with torch.no_grad():
-            text_feats = siglip.get_text_features(**inputs)
+            text_feats = siglip.text_model(**inputs).pooler_output
 
         text_feats = torch.nn.functional.normalize(text_feats, dim=-1)
         mean = text_feats.mean(dim=0, keepdim=True)
