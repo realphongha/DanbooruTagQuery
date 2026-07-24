@@ -74,7 +74,11 @@ def run(config):
         mean = text_feats.mean(dim=0, keepdim=True)
         centered = text_feats - mean
         _, _, Vt = torch.linalg.svd(centered, full_matrices=False)
-        tag_embeddings = (centered @ Vt[:384].T).cpu()
+        n = min(centered.size(0), Vt.size(0), 384)
+        tag_embeddings = centered @ Vt[:n].T
+        if n < 384:
+            tag_embeddings = torch.cat([tag_embeddings, torch.zeros(tag_embeddings.size(0), 384 - n, device=tag_embeddings.device)], dim=1)
+        tag_embeddings = tag_embeddings.cpu()
 
     wandb_run = None
     if not config.no_wandb:
