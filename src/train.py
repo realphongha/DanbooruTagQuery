@@ -80,27 +80,34 @@ def run(config):
             with ctx: loss = loss_fn(model(batch["image"].to(dev, non_blocking=True)), batch["labels"].to(dev, non_blocking=True))
             loss.backward(); optimizer.step(); scheduler.step(); total += loss.item()
             ema.update(model)
-        ema.apply(model)
-        model.eval(); losses = []; predictions = []; targets = []
-        with torch.no_grad():
-            for batch in val:
-                with ctx: logits = model(batch["image"].to(dev)); current = loss_fn(logits, batch["labels"].to(dev))
-                losses.append(current.item()); predictions.append(torch.sigmoid(logits).float().cpu()); targets.append(batch["labels"].cpu())
-        ema.restore(model)
-        metrics = multilabel_metrics(torch.cat(predictions), torch.cat(targets))
-        row = {"epoch": epoch + 1, "train_loss": total / len(train), "val_loss": sum(losses) / len(losses), **{k: v for k, v in metrics.items() if k != "per_tag_ap"}, "lr": optimizer.param_groups[0]["lr"], "duration": time.time() - started}
+        should_val = (epoch + 1) % config.val_interval == 0 or epoch == config.epochs - 1
+
+        if should_val:
+            ema.apply(model)
+            model.eval(); losses = []; predictions = []; targets = []
+            with torch.no_grad():
+                for batch in val:
+                    with ctx: logits = model(batch["image"].to(dev)); current = loss_fn(logits, batch["labels"].to(dev))
+                    losses.append(current.item()); predictions.append(torch.sigmoid(logits).float().cpu()); targets.append(batch["labels"].cpu())
+            ema.restore(model)
+            metrics = multilabel_metrics(torch.cat(predictions), torch.cat(targets))
+            row = {"epoch": epoch + 1, "train_loss": total / len(train), "val_loss": sum(losses) / len(losses), **{k: v for k, v in metrics.items() if k != "per_tag_ap"}, "lr": optimizer.param_groups[0]["lr"], "duration": time.time() - started}
+            print_metrics(metrics, tag_to_id, f"Epoch {epoch + 1}/{config.epochs}", extra={"Train loss": total / len(train), "Val loss": sum(losses) / len(losses), "LR": optimizer.param_groups[0]["lr"]}, show_per_tag=False)
+            if metrics["map"] > best:
+                best = metrics["map"]
+                ema.apply(model)
+                best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                ema.restore(model)
+                save_checkpoint(config.checkpoint_dir / "best.pt", {"model": best_state, "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row})
+        else:
+            row = {"epoch": epoch + 1, "train_loss": total / len(train), "lr": optimizer.param_groups[0]["lr"], "duration": time.time() - started}
+            print(f"Epoch {epoch + 1}/{config.epochs}  train_loss={total / len(train):.6f}  lr={optimizer.param_groups[0]['lr']:.2e}  duration={time.time() - started:.1f}s")
+
         with (config.run_dir / "metrics.jsonl").open("a") as file: file.write(json.dumps(row) + "\n")
         state = {"model": model.state_dict(), "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row}
         save_checkpoint(config.checkpoint_dir / "last.pt", state)
-        if metrics["map"] > best:
-            best = metrics["map"]
-            ema.apply(model)
-            state["model"] = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            ema.restore(model)
-            save_checkpoint(config.checkpoint_dir / "best.pt", state)
         if config.save_epochs > 0 and (epoch + 1) % config.save_epochs == 0:
             save_checkpoint(config.checkpoint_dir / f"epoch-{epoch + 1}.pt", state)
-        print_metrics(metrics, tag_to_id, f"Epoch {epoch + 1}/{config.epochs}", extra={"Train loss": total / len(train), "Val loss": sum(losses) / len(losses), "LR": optimizer.param_groups[0]["lr"]}, show_per_tag=False)
         if wandb_run: wandb_run.log(row)
     if wandb_run: wandb_run.finish()
 
