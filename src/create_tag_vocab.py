@@ -1,9 +1,12 @@
 """Create a tag-to-class-id mapping from Danbooru Parquet files.
 
+All unique tags are used as classes, sorted by descending frequency
+(ties broken alphabetically so runs are deterministic).
+
 Example:
     uv run python -m src.create_tag_vocab \
-        data/danbooru2025_lite_train.parquet \
-        data/danbooru2025_lite_val.parquet \
+        data/danbooru2025_train.parquet \
+        data/danbooru2025_val.parquet \
         --output data/tag_to_id.json
 """
 
@@ -15,7 +18,7 @@ from pathlib import Path
 import pandas as pd
 
 
-def create_tag_vocab(parquet_paths, output_path, num_tags=50):
+def create_tag_vocab(parquet_paths, output_path):
     counts = Counter()
 
     for parquet_path in parquet_paths:
@@ -27,13 +30,7 @@ def create_tag_vocab(parquet_paths, output_path, num_tags=50):
             if tags is not None:
                 counts.update(tags)
 
-    if len(counts) < num_tags:
-        raise ValueError(
-            f"Found only {len(counts)} unique tags, cannot create {num_tags} classes"
-        )
-
-    # Sort ties alphabetically so repeated runs produce the same mapping.
-    vocabulary = sorted(counts, key=lambda tag: (-counts[tag], tag))[:num_tags]
+    vocabulary = sorted(counts, key=lambda tag: (-counts[tag], tag))
     tag_to_id = {tag: index for index, tag in enumerate(vocabulary)}
 
     output_path = Path(output_path)
@@ -51,9 +48,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("parquet", nargs="+", type=Path)
     parser.add_argument("--output", type=Path, default=Path("data/tag_to_id.json"))
-    parser.add_argument("--num-tags", type=int, default=50)
     args = parser.parse_args()
-    create_tag_vocab(args.parquet, args.output, args.num_tags)
+    create_tag_vocab(args.parquet, args.output)
 
 
 if __name__ == "__main__":
