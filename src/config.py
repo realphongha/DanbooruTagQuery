@@ -3,7 +3,7 @@ from pathlib import Path
 
 @dataclass
 class TrainConfig:
-    image_size: int = 224
+    image_size: int = 256
     batch_size: int = 128
     epochs: int = 30
     learning_rate: float = 3e-4
@@ -11,7 +11,7 @@ class TrainConfig:
     num_workers: int = 8
     seed: int = 42
     warmup_epochs: int = 5
-    model_name: str = "vit_small_patch16_224.augreg_in21k_ft_in1k"
+    model_name: str = "vit_small_patch16_dinov3.lvd1689m"
     train_parquet: Path = Path("data/danbooru2025_lite_train.parquet")
     val_parquet: Path = Path("data/danbooru2025_lite_val.parquet")
     tag_to_id: Path = Path("data/tag_to_id.json")
