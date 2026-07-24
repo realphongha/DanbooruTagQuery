@@ -71,7 +71,7 @@ After downloading the images, start training with:
 uv run python -m src.train
 ```
 
-The default configuration uses 224px images, batch size 128, 30 epochs, AdamW, cosine decay with five warmup epochs, BCE-with-logits loss, and BF16 automatic mixed precision on CUDA.
+The default configuration uses 256px images, batch size 128, 30 epochs, AdamW, cosine decay with five warmup epochs, BCE-with-logits loss, and BF16 automatic mixed precision on CUDA.
 
 Checkpoints are written to:
 
