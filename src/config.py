@@ -25,6 +25,7 @@ class TrainConfig:
     backbone_lr_mult: float = 0.1
     ema_decay: float = 0.999
     head_type: str = "tag_query_head"
+    use_siglip_init: bool = True
     val_interval: int = 1
 
     def to_dict(self):

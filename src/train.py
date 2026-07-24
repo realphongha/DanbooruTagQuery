@@ -18,6 +18,12 @@ from .model import ImageTagger
 from .transforms import train_transforms, val_transforms
 from .utils import device, save_checkpoint, seed_everything, load_json
 
+try:
+    from transformers import SiglipModel, SiglipTokenizer
+except ImportError:
+    SiglipModel = None
+    SiglipTokenizer = None
+
 
 class EMA:
     def __init__(self, model, decay=0.999):
@@ -47,12 +53,34 @@ def run(config):
     tag_to_id = load_json(config.tag_to_id)
     config.num_classes = len(tag_to_id)
 
+    dev = device()
+    tag_embeddings = None
+    if config.head_type == "tag_query_head" and config.use_siglip_init:
+        if SiglipModel is None:
+            raise RuntimeError("transformers is required for SigLIP tag query initialization")
+        tags_sorted = sorted(tag_to_id, key=tag_to_id.get)
+        texts = [t.replace("_", " ") for t in tags_sorted]
+
+        siglip = SiglipModel.from_pretrained("google/siglip-base-patch16-224").to(dev).eval()
+        tokenizer = SiglipTokenizer.from_pretrained("google/siglip-base-patch16-224")
+
+        inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
+        inputs = {k: v.to(dev) for k, v in inputs.items()}
+        with torch.no_grad():
+            text_feats = siglip.get_text_features(**inputs)
+
+        text_feats = torch.nn.functional.normalize(text_feats, dim=-1)
+        mean = text_feats.mean(dim=0, keepdim=True)
+        centered = text_feats - mean
+        _, _, Vt = torch.linalg.svd(centered, full_matrices=False)
+        tag_embeddings = (centered @ Vt[:384].T).cpu()
+
     wandb_run = None
     if not config.no_wandb:
         import wandb
         wandb_run = wandb.init(project="danboorutagclip", config=config.to_dict())
 
-    seed_everything(config.seed); dev = device()
+    seed_everything(config.seed)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = config.run_dir / timestamp; checkpoint_dir = run_dir / "checkpoints"
     run_dir.mkdir(parents=True, exist_ok=True); checkpoint_dir.mkdir(parents=True, exist_ok=True)
@@ -61,7 +89,7 @@ def run(config):
     train = make_loader(config.train_parquet, config, train_transforms(config.image_size), True)
     val = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
 
-    model = ImageTagger(config.model_name, config.num_classes, head_type=config.head_type).to(dev); loss_fn = build_loss()
+    model = ImageTagger(config.model_name, config.num_classes, head_type=config.head_type, tag_embeddings=tag_embeddings).to(dev); loss_fn = build_loss()
     ema = EMA(model, config.ema_decay)
     optimizer = AdamW([
         {"params": model.backbone.parameters(), "lr": config.learning_rate * config.backbone_lr_mult},

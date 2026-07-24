@@ -16,11 +16,17 @@ class LinearHead(nn.Module):
 
 class TagQueryHead(nn.Module):
 
-    def __init__(self, embed_dim, num_classes, num_heads=8):
+    def __init__(self, embed_dim, num_classes, num_heads=8, init_queries=None):
         super().__init__()
-        self.tag_queries = nn.Parameter(
-            torch.randn(num_classes, embed_dim)
-        )
+        if init_queries is None:
+            self.tag_queries = nn.Parameter(
+                torch.randn(num_classes, embed_dim)
+            )
+        else:
+            assert init_queries.shape == (num_classes, embed_dim)
+            self.tag_queries = nn.Parameter(
+                init_queries.clone()
+            )
         self.cross_attn = nn.MultiheadAttention(
             embed_dim=embed_dim,
             num_heads=num_heads,
@@ -45,7 +51,7 @@ class TagQueryHead(nn.Module):
 
 
 class ImageTagger(nn.Module):
-    def __init__(self, model_name, num_classes, pretrained=True, head_type="tag_query_head"):
+    def __init__(self, model_name, num_classes, pretrained=True, head_type="tag_query_head", tag_embeddings=None):
         super().__init__()
         self.backbone = timm.create_model(
             model_name, pretrained=pretrained, num_classes=0
@@ -53,7 +59,7 @@ class ImageTagger(nn.Module):
         if head_type == "linear":
             self.head = LinearHead(self.backbone.num_features, num_classes)
         elif head_type == "tag_query_head":
-            self.head = TagQueryHead(self.backbone.num_features, num_classes)
+            self.head = TagQueryHead(self.backbone.num_features, num_classes, init_queries=tag_embeddings)
         else:
             raise ValueError(f"Unknown head_type: {head_type}")
 
