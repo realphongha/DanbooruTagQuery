@@ -24,6 +24,7 @@ class TrainConfig:
     save_epochs: int = 1
     backbone_lr_mult: float = 0.1
     ema_decay: float = 0.999
+    head_type: str = "tag_query_head"
 
     def to_dict(self):
         return {key: str(value) if isinstance(value, Path) else value for key, value in asdict(self).items()}

@@ -1,4 +1,5 @@
 import timm
+import torch
 from torch import nn
 
 
@@ -13,13 +14,44 @@ class LinearHead(nn.Module):
         return self.linear(tokens)
 
 
+class TagQueryHead(nn.Module):
+
+    def __init__(self, embed_dim, num_classes, num_heads=8):
+        super().__init__()
+        self.tag_queries = nn.Parameter(
+            torch.randn(num_classes, embed_dim)
+        )
+        self.cross_attn = nn.MultiheadAttention(
+            embed_dim=embed_dim,
+            num_heads=num_heads,
+            batch_first=True,
+        )
+        self.classifier = nn.Linear(embed_dim, 1)
+
+    def forward(self, tokens):
+        B = tokens.size(0)
+        queries = self.tag_queries.unsqueeze(0).expand(B, -1, -1)
+        tag_features, _ = self.cross_attn(
+            query=queries,
+            key=tokens,
+            value=tokens,
+        )
+        logits = self.classifier(tag_features)
+        return logits.squeeze(-1)
+
+
 class ImageTagger(nn.Module):
-    def __init__(self, model_name, num_classes, pretrained=True):
+    def __init__(self, model_name, num_classes, pretrained=True, head_type="tag_query_head"):
         super().__init__()
         self.backbone = timm.create_model(
             model_name, pretrained=pretrained, num_classes=0
         )
-        self.head = LinearHead(self.backbone.num_features, num_classes)
+        if head_type == "linear":
+            self.head = LinearHead(self.backbone.num_features, num_classes)
+        elif head_type == "tag_query_head":
+            self.head = TagQueryHead(self.backbone.num_features, num_classes)
+        else:
+            raise ValueError(f"Unknown head_type: {head_type}")
 
     def forward(self, images):
         tokens = self.backbone.forward_features(images)

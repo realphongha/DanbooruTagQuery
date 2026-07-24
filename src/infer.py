@@ -6,7 +6,7 @@ from .model import ImageTagger
 from .transforms import val_transforms
 
 def predict(image_path, checkpoint, top_k=10):
-    config = TrainConfig(); state = torch.load(checkpoint, map_location="cpu"); model = ImageTagger(config.model_name, config.num_classes, pretrained=False); model.load_state_dict(state["model"]); model.eval()
+    config = TrainConfig(); state = torch.load(checkpoint, map_location="cpu"); model = ImageTagger(config.model_name, config.num_classes, pretrained=False, head_type=config.head_type); model.load_state_dict(state["model"]); model.eval()
     with Image.open(image_path) as image: tensor = val_transforms(config.image_size)(image.convert("RGB")).unsqueeze(0)
     scores = torch.sigmoid(model(tensor))[0]; inverse = {value: key for key, value in state["tag_to_id"].items()}
     return [(inverse[index], float(scores[index])) for index in scores.argsort(descending=True)[:top_k]]

@@ -61,7 +61,7 @@ def run(config):
     train = make_loader(config.train_parquet, config, train_transforms(config.image_size), True)
     val = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
 
-    model = ImageTagger(config.model_name, config.num_classes).to(dev); loss_fn = build_loss()
+    model = ImageTagger(config.model_name, config.num_classes, head_type=config.head_type).to(dev); loss_fn = build_loss()
     ema = EMA(model, config.ema_decay)
     optimizer = AdamW([
         {"params": model.backbone.parameters(), "lr": config.learning_rate * config.backbone_lr_mult},

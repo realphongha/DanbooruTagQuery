@@ -10,7 +10,7 @@ from .utils import device, load_json
 def evaluate(checkpoint, config=TrainConfig()):
     tag_to_id = load_json(config.tag_to_id)
     config.num_classes = len(tag_to_id)
-    state = torch.load(checkpoint, map_location="cpu", weights_only=False); dev = device(); model = ImageTagger(config.model_name, config.num_classes, pretrained=False); model.load_state_dict(state["model"]); model.to(dev).eval(); loader = make_loader(config.val_parquet, config, val_transforms(config.image_size), False); predictions = []; targets = []
+    state = torch.load(checkpoint, map_location="cpu", weights_only=False); dev = device(); model = ImageTagger(config.model_name, config.num_classes, pretrained=False, head_type=config.head_type); model.load_state_dict(state["model"]); model.to(dev).eval(); loader = make_loader(config.val_parquet, config, val_transforms(config.image_size), False); predictions = []; targets = []
     with torch.no_grad():
         for batch in loader: predictions.append(torch.sigmoid(model(batch["image"].to(dev))).cpu()); targets.append(batch["labels"])
     targets_tensor = torch.cat(targets)
