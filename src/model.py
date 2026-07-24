@@ -31,11 +31,15 @@ class TagQueryHead(nn.Module):
     def forward(self, tokens):
         B = tokens.size(0)
         queries = self.tag_queries.unsqueeze(0).expand(B, -1, -1)
-        tag_features, _ = self.cross_attn(
-            query=queries,
-            key=tokens,
-            value=tokens,
-        )
+        with torch.nn.attention.sdpa_kernel(
+            torch.nn.attention.SDPBackend.FLASH_ATTENTION
+        ):
+            tag_features, _ = self.cross_attn(
+                query=queries,
+                key=tokens,
+                value=tokens,
+                need_weights=False
+            )
         logits = self.classifier(tag_features)
         return logits.squeeze(-1)
 

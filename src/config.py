@@ -21,11 +21,11 @@ class TrainConfig:
     prefetch_factor: int = 2
     download_workers: int = 32
     download_retries: int = 3
-    save_epochs: int = 5
+    save_epochs: int = 3
     backbone_lr_mult: float = 0.1
     ema_decay: float = 0.999
     head_type: str = "tag_query_head"
-    val_interval: int = 3
+    val_interval: int = 1
 
     def to_dict(self):
         return {key: str(value) if isinstance(value, Path) else value for key, value in asdict(self).items()}
