@@ -139,13 +139,13 @@ def run(config):
                     ema.restore(model)
                     save_checkpoint(config.checkpoint_dir / "best.pt", {"model": best_state, "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row})
             else:
+                row = {"epoch": epoch + 1, "train_loss": total / len(train), "val_loss": val_loss, "lr": optimizer.param_groups[0]["lr"], "duration": time.time() - started}
                 if val_loss < best:
                     best = val_loss
                     ema.apply(model)
                     best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
                     ema.restore(model)
                     save_checkpoint(config.checkpoint_dir / "best.pt", {"model": best_state, "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row})
-                row = {"epoch": epoch + 1, "train_loss": total / len(train), "val_loss": val_loss, "lr": optimizer.param_groups[0]["lr"], "duration": time.time() - started}
                 print(f"Epoch {epoch + 1}/{config.epochs}  train_loss={total / len(train):.6f}  val_loss={val_loss:.6f}  lr={optimizer.param_groups[0]['lr']:.2e}  duration={time.time() - started:.1f}s")
         else:
             row = {"epoch": epoch + 1, "train_loss": total / len(train), "lr": optimizer.param_groups[0]["lr"], "duration": time.time() - started}
