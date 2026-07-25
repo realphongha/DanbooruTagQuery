@@ -4,9 +4,9 @@ from pathlib import Path
 @dataclass
 class TrainConfig:
     image_size: int = 256
-    batch_size: int = 128
-    epochs: int = 100
-    learning_rate: float = 3e-4
+    batch_size: int = 64
+    epochs: int = 50
+    learning_rate: float = 2e-4
     weight_decay: float = 0.05
     num_workers: int = 8
     seed: int = 42
