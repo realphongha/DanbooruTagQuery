@@ -21,12 +21,13 @@ class TrainConfig:
     prefetch_factor: int = 2
     download_workers: int = 32
     download_retries: int = 3
-    save_epochs: int = 10
+    save_epochs: int = 5
     backbone_lr_mult: float = 0.1
     ema_decay: float = 0.999
     head_type: str = "tag_query_head"
     use_siglip_init: bool = False
-    val_interval: int = 10
+    val_interval: int = 5
+    compute_multilabel_metrics: bool = False
 
     def to_dict(self):
         return {key: str(value) if isinstance(value, Path) else value for key, value in asdict(self).items()}
