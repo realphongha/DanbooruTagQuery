@@ -6,6 +6,9 @@ wandb/
 data/*
 failed_downloads.csv
 
+# Pi
+.pi-subagents/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[codz]

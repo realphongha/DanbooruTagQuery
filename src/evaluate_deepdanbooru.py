@@ -67,8 +67,16 @@ def main():
     records = frame.to_dict("records")
     print(f"  {len(records)} images")
 
+    # Build DD-space ground truth indices: intersection DD tag indices
+    intersection_tag_names = {tag for tag in our_tags if tag in dd_tag_to_id}
+    intersection_dd_indices = sorted(dd_tag_to_id[tag] for tag in intersection_tag_names)
+    dd_tag_names_for_intersection = [dd_tags[i] for i in intersection_dd_indices]
+    print(f"Intersection tags for DD-space eval: {len(intersection_dd_indices)}")
+
     predictions = []
     targets = []
+    dd_predictions = []  # scores in DD tag space (intersection only)
+    dd_targets = []      # labels in DD tag space
 
     for start in tqdm(range(0, len(records), args.batch_size), desc="Evaluating"):
         batch = records[start : start + args.batch_size]
@@ -101,11 +109,31 @@ def main():
             predictions.append(our_scores)
             targets.append(batch_labels[b])
 
+            # DD-space: scores and targets for intersection tags
+            dd_score_vec = torch.zeros(len(intersection_dd_indices), dtype=torch.float32)
+            dd_target_vec = torch.zeros(len(intersection_dd_indices), dtype=torch.float32)
+            for j, dd_idx in enumerate(intersection_dd_indices):
+                dd_score_vec[j] = float(dd_scores[b, dd_idx])
+                tag_name = dd_tags[dd_idx]
+                our_idx = tag_to_id.get(tag_name)
+                if our_idx is not None and batch_labels[b][our_idx] > 0.5:
+                    dd_target_vec[j] = 1.0
+            dd_predictions.append(dd_score_vec)
+            dd_targets.append(dd_target_vec)
+
     preds_tensor = torch.stack(predictions)
     targets_tensor = torch.stack(targets)
     tag_counts = {tid: int(targets_tensor[:, tid].sum().item()) for tid in range(len(tag_to_id))}
     metrics = multilabel_metrics(preds_tensor, targets_tensor)
-    print_metrics(metrics, tag_to_id, "TorchDeepDanbooru Evaluation Results", tag_counts=tag_counts)
+    print_metrics(metrics, tag_to_id, "TorchDeepDanbooru Evaluation Results (Our Tag Space)", tag_counts=tag_counts)
+
+    # DD-space metrics on intersection tags
+    dd_preds_tensor = torch.stack(dd_predictions)
+    dd_targets_tensor = torch.stack(dd_targets)
+    dd_tag_to_id_subset = {name: i for i, name in enumerate(dd_tag_names_for_intersection)}
+    dd_tag_counts = {i: int(dd_targets_tensor[:, i].sum().item()) for i in range(len(dd_tag_names_for_intersection))}
+    dd_metrics = multilabel_metrics(dd_preds_tensor, dd_targets_tensor)
+    print_metrics(dd_metrics, dd_tag_to_id_subset, "TorchDeepDanbooru Evaluation Results (DD Tag Space, Intersection Only)", tag_counts=dd_tag_counts)
     return metrics
 
 
