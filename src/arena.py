@@ -73,7 +73,9 @@ def main():
                         help="Checkpoint filename in repo_dir")
     parser.add_argument("--mldanbooru-model-name", type=str, default="caformer_m36")
     parser.add_argument("--mldanbooru-fp16", action="store_true", default=False)
-    parser.add_argument("--skip-models", type=str, nargs="*", default=[])
+    parser.add_argument("--skip-models", type=str, nargs="*", default=[],
+                        help="Skip models by name, separated by spaces. "
+                             "Model names: DeepDanbooru, JoyTag, WD-SwinV2, ML-Danbooru")
     args = parser.parse_args()
 
     dev_type = "cuda" if torch.cuda.is_available() else "cpu"
