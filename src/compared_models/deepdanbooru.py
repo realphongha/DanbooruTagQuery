@@ -4,7 +4,7 @@ import numpy as np
 import torch
 from PIL import Image
 
-from ..deepdanbooru_model import DeepDanbooruModel
+from .deepdanbooru_model import DeepDanbooruModel
 from ._download import download_url
 from .base import BaseModel
 
