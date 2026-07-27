@@ -4,7 +4,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from sklearn.metrics import average_precision_score
 from tqdm import tqdm
 
 from .config import TrainConfig
@@ -23,21 +22,20 @@ def evaluate(checkpoint, config=TrainConfig()):
     model.load_state_dict(state["model"])
     model.to(dev).eval()
     loader = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
-    predictions = []
-    targets = []
+    N = len(loader.dataset)
+    preds = torch.empty(N, config.num_classes, dtype=torch.float32)
+    targets = torch.empty(N, config.num_classes, dtype=torch.float32)
+    offset = 0
     with torch.no_grad():
         for batch in tqdm(loader):
-            predictions.append(torch.sigmoid(model(batch["image"].to(dev))).cpu())
-            targets.append(batch["labels"])
-    preds_tensor = torch.cat(predictions).numpy()
-    targets_tensor = torch.cat(targets)
-    tag_counts = {tid: int(targets_tensor[:, tid].sum().item()) for tid in range(len(tag_to_id))}
-    targets_np = targets_tensor.numpy()
-    ap_per_tag = average_precision_score(targets_np, preds_tensor, average=None)
-    tags_with_any = targets_np.any(axis=0)
-    ap_dict = {tid: float(ap_per_tag[tid]) if tags_with_any[tid] else float("nan") for tid in range(len(tag_to_id))}
-    metrics = multilabel_metrics(preds_tensor, targets_np)
-    metrics["per_tag_ap"] = ap_dict
+            B = batch["image"].size(0)
+            preds[offset:offset+B] = torch.sigmoid(model(batch["image"].to(dev))).cpu()
+            targets[offset:offset+B] = batch["labels"]
+            offset += B
+
+    tag_counts = {tid: int(targets[:, tid].sum().item()) for tid in range(len(tag_to_id))}
+    metrics = multilabel_metrics(preds, targets)
+    del preds, targets
     return metrics, tag_to_id, tag_counts
 
 if __name__ == "__main__":
