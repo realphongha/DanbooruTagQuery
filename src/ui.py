@@ -170,7 +170,9 @@ def build_app(predictor: Predictor):
             with gr.TabItem("📋 Tag list"):
                 tag_table = gr.HTML(label="Tags")
             with gr.TabItem("📝 Comma-separated"):
-                tag_string = gr.Textbox(label="Tags", lines=6)
+                with gr.Row():
+                    tag_string = gr.Textbox(label="Tags", lines=6, scale=1, elem_id="csv-text")
+                    copy_btn = gr.Button("📋 Copy", variant="secondary", size="sm", elem_id="copy-csv-btn")
 
         # ── status row ──
         with gr.Row():
@@ -378,6 +380,17 @@ def build_app(predictor: Predictor):
                 inputs=[top_k, min_score, sort_by, use_underscore, categories],
                 outputs=[tag_table, tag_string],
             )
+
+    # copy button JS
+        copy_btn.click(
+            fn=lambda: None,
+            inputs=[],
+            outputs=[],
+            js="""() => {
+                const tb = document.querySelector('#csv-text textarea');
+                if (tb) { navigator.clipboard.writeText(tb.value); }
+            }"""
+        )
 
     return app
 
