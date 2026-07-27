@@ -1,5 +1,6 @@
 import argparse
 import torch
+from tqdm import tqdm
 from .config import TrainConfig
 from .dataset import make_loader
 from .metrics import multilabel_metrics, print_metrics
@@ -10,12 +11,25 @@ from .utils import device, load_json
 def evaluate(checkpoint, config=TrainConfig()):
     tag_to_id = load_json(config.tag_to_id)
     config.num_classes = len(tag_to_id)
-    state = torch.load(checkpoint, map_location="cpu", weights_only=False); dev = device(); model = ImageTagger(config.model_name, config.num_classes, pretrained=False, head_type=config.head_type); model.load_state_dict(state["model"]); model.to(dev).eval(); loader = make_loader(config.val_parquet, config, val_transforms(config.image_size), False); predictions = []; targets = []
+    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
+    dev = device()
+    model = ImageTagger(config.model_name, config.num_classes, pretrained=False, head_type=config.head_type)
+    model.load_state_dict(state["model"])
+    model.to(dev).eval()
+    loader = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
+    predictions = []
+    targets = []
     with torch.no_grad():
-        for batch in loader: predictions.append(torch.sigmoid(model(batch["image"].to(dev))).cpu()); targets.append(batch["labels"])
+        for batch in tqdm(loader):
+            predictions.append(torch.sigmoid(model(batch["image"].to(dev))).cpu())
+            targets.append(batch["labels"])
     targets_tensor = torch.cat(targets)
     tag_counts = {tid: int(targets_tensor[:, tid].sum().item()) for tid in range(len(tag_to_id))}
     return multilabel_metrics(torch.cat(predictions), targets_tensor), tag_to_id, tag_counts
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(); parser.add_argument("checkpoint"); args = parser.parse_args(); metrics, tag_to_id, tag_counts = evaluate(args.checkpoint); print_metrics(metrics, tag_to_id, tag_counts=tag_counts)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("checkpoint")
+    args = parser.parse_args()
+    metrics, tag_to_id, tag_counts = evaluate(args.checkpoint)
+    print_metrics(metrics, tag_to_id, tag_counts=tag_counts)
