@@ -15,13 +15,17 @@ from src.api import posts, get_auth_info
 
 
 def _download_one(url: str, dest: Path) -> bool:
-    """Download a single file. Returns True on success."""
+    """Download a single file. Returns True on success.
+    Writes to a temp file first, renames atomically to avoid partial files.
+    """
     try:
         from curl_cffi import requests
 
         resp = requests.get(url, impersonate="chrome", timeout=120)
         resp.raise_for_status()
-        dest.write_bytes(resp.content)
+        tmp = dest.with_suffix(dest.suffix + ".tmp")
+        tmp.write_bytes(resp.content)
+        tmp.rename(dest)
         return True
     except Exception as exc:
         print(f"  FAIL: {dest.name} — {exc}", file=sys.stderr)
@@ -47,6 +51,9 @@ def download_tag(
 
     out = Path(output_dir) / tag.replace(" ", "_")
     out.mkdir(parents=True, exist_ok=True)
+    # clean stale partials from previous runs
+    for p in out.glob("*.tmp"):
+        p.unlink()
     print(f"Output directory: {out}")
 
     # paginate through all posts
