@@ -59,6 +59,22 @@ class TagCache:
             )
             self._conn.commit()
 
+    def get_many(self, names: list[str]) -> dict[str, tuple[int | None, str | None]]:
+        """Return dict of {name: (category, wiki_body)} for all *names*."""
+        if not names:
+            return {}
+        with self._lock:
+            placeholders = ",".join("?" for _ in names)
+            cur = self._conn.execute(
+                f"SELECT name, category, wiki_body FROM tag_cache "
+                f"WHERE name IN ({placeholders})",
+                names,
+            )
+            result: dict[str, tuple[int | None, str | None]] = {}
+            for row in cur:
+                result[row[0]] = (row[1], row[2])
+            return result
+
     def clear(self):
         with self._lock:
             self._conn.execute("DELETE FROM tag_cache")

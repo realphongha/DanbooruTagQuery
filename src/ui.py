@@ -49,12 +49,14 @@ def format_tag(tag: str, use_underscore: bool) -> str:
 def enrich_tags(tags_scores: list[tuple[str, float]]) -> dict[str, dict]:
     """Return dict: tag_name -> {score, category, category_name, wiki_body}.
 
-    Only reads from cache — no API calls. Wiki body is None unless
-    previously cached; lazy-fetched on hover via get_tag_description().
+    Batches cache lookups — no per-tag SQLite queries.
+    Wiki body is lazy-fetched on hover via get_tag_description().
     """
+    tags = [t for t, _ in tags_scores]
+    cached_map = _CACHE.get_many(tags)
     result: dict[str, dict] = {}
     for tag, score in tags_scores:
-        cached = _CACHE.get(tag)
+        cached = cached_map.get(tag)
         if cached is not None:
             cat_id, wbody = cached
         else:
