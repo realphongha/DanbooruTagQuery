@@ -97,7 +97,14 @@ def build_app(predictor: Predictor):
     # load initial auth info for display
     init_user, init_key_masked = get_auth_info()
 
-    with gr.Blocks(title="DanbooruTagCLIP", theme=gr.themes.Soft()) as app:
+    css = """
+    #csv-wrap { position: relative; }
+    #copy-csv-btn { position: absolute; top: 4px; right: 4px; z-index: 10;
+                    min-width: 0; padding: 0 6px; height: 24px;
+                    font-size: 13px; line-height: 24px; }
+    """
+
+    with gr.Blocks(title="DanbooruTagCLIP", theme=gr.themes.Soft(), css=css) as app:
         gr.Markdown("# 🏷️ DanbooruTagCLIP")
 
         with gr.Row():
@@ -170,14 +177,26 @@ def build_app(predictor: Predictor):
             with gr.TabItem("📋 Tag list"):
                 tag_table = gr.HTML(label="Tags")
             with gr.TabItem("📝 Comma-separated"):
-                with gr.Row():
-                    tag_string = gr.Textbox(label="Tags", lines=6, scale=1, elem_id="csv-text")
-                    copy_btn = gr.Button("📋 Copy", variant="secondary", size="sm", elem_id="copy-csv-btn")
+                with gr.Column(elem_id="csv-wrap"):
+                    tag_string = gr.Textbox(label="Tags", lines=6, elem_id="csv-text")
+                    copy_btn = gr.Button("📋", elem_id="copy-csv-btn")
 
         # ── status row ──
         with gr.Row():
             status = gr.Markdown("Ready. Load an image and click **Analyze**.")
-            clear_cache_btn = gr.Button("🧹 Clear tag cache", size="sm")
+            clear_cache_btn = gr.Button("🧹", size="sm", elem_id="clear-cache-btn")
+
+        # ── tag score query ──
+        gr.Markdown("### 🔍 Tag score query")
+        with gr.Row():
+            tag_query = gr.Dropdown(
+                label="Search tag",
+                placeholder="Type tag name to see its score…",
+                allow_custom_value=True,
+                choices=[],
+                scale=3,
+            )
+        tag_query_output = gr.HTML(label="Results")
 
         # ── helpers ────────────────────────────────────────────────────────
 
@@ -328,10 +347,12 @@ def build_app(predictor: Predictor):
                     return "<i>Error loading URL.</i>", "", f"❌ {exc}"
 
             state["current_image"] = pil
+            import time
+            t0 = time.time()
             all_logits = predict_all(pil, state["predictor"])
             state["all_logits"] = all_logits
 
-            # enrich with category + wiki from API (cached)
+            # enrich with category from cache
             state["tag_metadata"] = enrich_tags(all_logits)
 
             table, csv = refresh_results(
@@ -339,32 +360,41 @@ def build_app(predictor: Predictor):
                 sort_by.value, use_underscore.value,
                 categories.value,
             )
+            elapsed = time.time() - t0
             n = len(state["tag_metadata"])
             cached = _CACHE.size()
-            return table, csv, f"✅ {n} tags · {cached} cached"
+            return table, csv, f"✅ {n} tags · {cached} cached · {elapsed:.2f}s"
 
         analyze_btn.click(
             fn=on_analyze,
             inputs=[image_input, url_input],
             outputs=[tag_table, tag_string, status],
+        ).then(
+            fn=lambda: gr.Dropdown(choices=sorted(state.get("tag_metadata", {}).keys())),
+            inputs=[],
+            outputs=[tag_query],
         )
 
         url_input.submit(
             fn=on_analyze,
             inputs=[image_input, url_input],
             outputs=[tag_table, tag_string, status],
+        ).then(
+            fn=lambda: gr.Dropdown(choices=sorted(state.get("tag_metadata", {}).keys())),
+            inputs=[],
+            outputs=[tag_query],
         )
 
         def on_clear():
             state["all_logits"] = None
             state["tag_metadata"] = None
             state["current_image"] = None
-            return None, "", "<i>No results yet.</i>", "Cleared."
+            return None, "", "<i>No results yet.</i>", "Cleared.", gr.Dropdown(choices=[]), ""
 
         clear_btn.click(
             fn=on_clear,
             inputs=[],
-            outputs=[image_input, url_input, tag_table, tag_string, status],
+            outputs=[image_input, url_input, tag_table, tag_string, status, tag_query, tag_query_output],
         )
 
         def on_clear_cache():
@@ -380,6 +410,29 @@ def build_app(predictor: Predictor):
                 inputs=[top_k, min_score, sort_by, use_underscore, categories],
                 outputs=[tag_table, tag_string],
             )
+
+    # tag score query
+        def query_tag_score(tag_name):
+            meta = state.get("tag_metadata")
+            if not meta or tag_name not in meta:
+                return "<i>No results. Run Analyze first.</i>"
+            m = meta[tag_name]
+            cat = m["category_name"] or "?"
+            return (
+                f"<table style='width:100%'>"
+                f"<tr><th>Tag</th><th>Score</th><th>Category</th></tr>"
+                f"<tr>"
+                f"<td>{tag_name}</td>"
+                f"<td>{m['score']:.4f}</td>"
+                f"<td><code>{cat}</code></td>"
+                f"</tr></table>"
+            )
+
+        tag_query.change(
+            fn=query_tag_score,
+            inputs=[tag_query],
+            outputs=[tag_query_output],
+        )
 
     # copy button JS
         copy_btn.click(
