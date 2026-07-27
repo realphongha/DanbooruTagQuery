@@ -37,6 +37,10 @@ class JoyTag(BaseModel):
     def tag_names(self) -> list[str]:
         return self._tags
 
+    @property
+    def input_size(self) -> tuple[int, int]:
+        return (self._image_size, self._image_size)
+
     def load(self) -> None:
         model_dir = self._model_dir
         model_dir.mkdir(parents=True, exist_ok=True)

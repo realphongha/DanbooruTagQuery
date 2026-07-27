@@ -36,6 +36,17 @@ class BaseModel(ABC):
         """
 
     @property
+    def input_size(self) -> tuple[int, int] | None:
+        return None
+
+    @property
+    def param_count(self) -> int | None:
+        model = getattr(self, '_model', None)
+        if model is not None and hasattr(model, 'parameters'):
+            return sum(p.numel() for p in model.parameters())
+        return None
+
+    @property
     def device(self) -> torch.device:
         return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

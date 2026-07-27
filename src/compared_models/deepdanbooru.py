@@ -31,6 +31,10 @@ class DeepDanbooru(BaseModel):
     def tag_names(self) -> list[str]:
         return self._tags
 
+    @property
+    def input_size(self) -> tuple[int, int]:
+        return (512, 512)
+
     def load(self) -> None:
         ckpt = self._checkpoint
         if not ckpt.exists():

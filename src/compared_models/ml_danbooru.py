@@ -42,6 +42,10 @@ class MLDanbooru(BaseModel):
     def tag_names(self) -> list[str]:
         return self._tags
 
+    @property
+    def input_size(self) -> tuple[int, int]:
+        return (448, 448)
+
     def load(self) -> None:
         import onnxruntime as ort
 

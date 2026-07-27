@@ -58,6 +58,10 @@ class WDTagger(BaseModel):
     def tag_names(self) -> list[str]:
         return self._tags
 
+    @property
+    def input_size(self) -> tuple[int, int] | None:
+        return getattr(self, "_input_size", None)
+
     def load(self) -> None:
         repo_id = self._repo_id
         print(f"  Loading WD tagger '{self._model_name}' from {repo_id} ...")
@@ -65,7 +69,9 @@ class WDTagger(BaseModel):
         model = timm.create_model("hf-hub:" + repo_id, pretrained=True).eval()
         # Keep on CPU; predict() moves to device
         self._model = model
-        self._transform = create_transform(**resolve_data_config(model.pretrained_cfg, model=model))
+        cfg = resolve_data_config(model.pretrained_cfg, model=model)
+        self._input_size = tuple(cfg["input_size"][1:])  # (3, H, W) → (H, W)
+        self._transform = create_transform(**cfg)
 
         csv_path = hf_hub_download(repo_id=repo_id, filename="selected_tags.csv")
         df = pd.read_csv(csv_path, usecols=["name", "category"])
