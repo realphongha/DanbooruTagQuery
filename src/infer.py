@@ -32,7 +32,7 @@ def predict(image_path, checkpoint, top_k=None, min_score=0.0, ignored_tags=None
     with Image.open(image_path) as image:
         tensor = predictor.val_transform(image.convert("RGB")).unsqueeze(0)
 
-    scores = predictor.run(tensor)
+    scores = predictor.run(tensor).flatten()
     inverse = {v: k for k, v in tag_to_id.items()}
     indices = np.argsort(scores)[::-1]
     results = [(inverse[int(i)], float(scores[i])) for i in indices]
@@ -81,7 +81,7 @@ def batch_infer(
         try:
             with Image.open(img_path) as im:
                 tensor = predictor.val_transform(im.convert("RGB")).unsqueeze(0)
-            scores = predictor.run(tensor)
+            scores = predictor.run(tensor).flatten()
             indices = np.argsort(scores)[::-1]
             results = [(inverse[int(i)], float(scores[i])) for i in indices]
             if ignored_tags:
