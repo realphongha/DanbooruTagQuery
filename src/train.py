@@ -14,9 +14,9 @@ from .config import TrainConfig
 from .dataset import make_loader
 from .losses import build_loss
 from .metrics import multilabel_metrics, print_metrics
-from .model import ImageTagger
+from .model import ImageTagger, transfer_weights
 from .transforms import train_transforms, val_transforms
-from .utils import device, save_checkpoint, seed_everything, load_json
+from .utils import device, print_sdp_backend_status, save_checkpoint, seed_everything, load_json
 
 try:
     from transformers import SiglipModel, SiglipTokenizer
@@ -54,6 +54,7 @@ def run(config):
     config.num_classes = len(tag_to_id)
 
     dev = device()
+    print_sdp_backend_status()
     tag_embeddings = None
     if config.head_type == "tag_query_head" and config.use_siglip_init:
         if SiglipModel is None:
@@ -94,7 +95,11 @@ def run(config):
     train = make_loader(config.train_parquet, config, train_transforms(config.image_size), True)
     val = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
 
-    model = ImageTagger(config.model_name, config.num_classes, head_type=config.head_type, tag_embeddings=tag_embeddings).to(dev); loss_fn = build_loss()
+    model = ImageTagger(config.model_name, config.num_classes, head_type=config.head_type, tag_embeddings=tag_embeddings).to(dev)
+    if args.checkpoint:
+        stats = transfer_weights(model, tag_to_id, args.checkpoint, weights_key="model_ema", verbose=True)
+        print(f"  Transferred {stats['query_transfer_count']} / {stats['new_tag_count']} tag queries")
+    loss_fn = build_loss()
     ema = EMA(model, config.ema_decay)
     optimizer = AdamW([
         {"params": model.backbone.parameters(), "lr": config.learning_rate * config.backbone_lr_mult},
@@ -161,7 +166,7 @@ def run(config):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(); parser.add_argument("--epochs", type=int); parser.add_argument("--no-wandb", action="store_true")
+    parser = argparse.ArgumentParser(); parser.add_argument("--epochs", type=int); parser.add_argument("--no-wandb", action="store_true"); parser.add_argument("--checkpoint", type=str, default=None, help="Path to pretrained checkpoint for weight transfer")
     args = parser.parse_args(); config = TrainConfig(); config.no_wandb = args.no_wandb
     if args.epochs: config.epochs = args.epochs
     run(config)

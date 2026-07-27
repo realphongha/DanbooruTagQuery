@@ -19,7 +19,7 @@ def evaluate(checkpoint, config=TrainConfig()):
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
     dev = device()
     model = ImageTagger(config.model_name, config.num_classes, pretrained=False, head_type=config.head_type)
-    model.load_state_dict(state["model"])
+    model.load_state_dict(state["model_ema"])
     model.to(dev).eval()
     loader = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
     N = len(loader.dataset)

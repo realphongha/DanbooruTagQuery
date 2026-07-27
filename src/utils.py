@@ -1,4 +1,5 @@
 import json
+import os
 import random
 from pathlib import Path
 import numpy as np
@@ -12,6 +13,29 @@ def device() -> torch.device:
 
 def save_checkpoint(path, state) -> None:
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True); torch.save(state, path)
+
+def print_sdp_backend_status():
+    if not torch.cuda.is_available():
+        print("  SDP backend: CPU — no CUDA available")
+        return
+
+    flash = torch.backends.cuda.flash_sdp_enabled()
+    mem_eff = torch.backends.cuda.mem_efficient_sdp_enabled()
+    math = torch.backends.cuda.math_sdp_enabled()
+    print("  SDP backends enabled:")
+    print(f"    {'✓' if flash else '✗'} FlashAttention")
+    print(f"    {'✓' if mem_eff else '✗'} MemoryEfficientAttention")
+    print(f"    {'✓' if math else '✗'} Math (fallback)")
+
+    if flash:
+        print("  → FlashAttention will be used when shapes are compatible")
+    elif mem_eff:
+        print("  → MemoryEfficientAttention (cutlass) will be used when shapes are compatible")
+    elif math:
+        print("  → Math fallback")
+    else:
+        print("  → No SDP backend available")
+
 
 def load_json(path):
     with Path(path).open() as file: return json.load(file)
