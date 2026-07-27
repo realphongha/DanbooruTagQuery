@@ -55,7 +55,7 @@ def download_tag(
     print(f"Fetching posts for tag '{tag}' …")
     while True:
         print(f"  Page {page} …", end=" ", flush=True)
-        batch = posts(f"{tag} order:id", limit=200)
+        batch = posts(f"{tag} order:id", limit=200, page=page)
         if not batch:
             print("empty page, done.")
             break

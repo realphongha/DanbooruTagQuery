@@ -101,9 +101,9 @@ def wiki_body(title: str) -> str | None:
     return page["body"] if page else None
 
 
-def posts(tags: str, limit: int = 20) -> list[dict]:
+def posts(tags: str, limit: int = 20, page: int = 1) -> list[dict]:
     """Search posts by tag string."""
-    return get("/posts.json", {"tags": tags, "limit": limit})  # type: ignore[return-value]
+    return get("/posts.json", {"tags": tags, "limit": limit, "page": page})  # type: ignore[return-value]
 
 
 def tags(search: str, limit: int = 20) -> list[dict]:
