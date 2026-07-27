@@ -37,9 +37,11 @@ class TagQueryHead(nn.Module):
     def forward(self, tokens):
         B = tokens.size(0)
         queries = self.tag_queries.unsqueeze(0).expand(B, -1, -1)
-        with torch.nn.attention.sdpa_kernel(
-            torch.nn.attention.SDPBackend.FLASH_ATTENTION
-        ):
+        with torch.nn.attention.sdpa_kernel([
+            torch.nn.attention.SDPBackend.FLASH_ATTENTION,
+            torch.nn.attention.SDPBackend.EFFICIENT_ATTENTION,
+            torch.nn.attention.SDPBackend.MATH,
+        ]):
             tag_features, _ = self.cross_attn(
                 query=queries,
                 key=tokens,
