@@ -26,27 +26,35 @@ except ImportError:
 
 
 class EMA:
+    @staticmethod
+    def _strip(n: str) -> str:
+        return n.removeprefix("_orig_mod.")
+
     def __init__(self, model, decay=0.999):
         self.decay = decay
-        self.shadow = {n: p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
+        self.shadow = {self._strip(n): p.detach().clone() for n, p in model.named_parameters() if p.requires_grad}
         self.backup = {}
 
     def update(self, model):
         with torch.no_grad():
             for n, p in model.named_parameters():
                 if p.requires_grad:
-                    self.shadow[n] = self.decay * self.shadow[n] + (1 - self.decay) * p.data
+                    self.shadow[self._strip(n)] = self.decay * self.shadow[self._strip(n)] + (1 - self.decay) * p.data
 
     def apply(self, model):
         for n, p in model.named_parameters():
             if p.requires_grad:
-                self.backup[n] = p.detach().clone()
-                p.data = self.shadow[n]
+                self.backup[self._strip(n)] = p.detach().clone()
+                p.data = self.shadow[self._strip(n)]
 
     def restore(self, model):
         for n, p in model.named_parameters():
             if p.requires_grad:
-                p.data = self.backup[n]
+                p.data = self.backup[self._strip(n)]
+
+
+def _clean(sd):
+    return {k.removeprefix("_orig_mod."): v for k, v in sd.items()}
 
 
 def run(config):
@@ -54,6 +62,13 @@ def run(config):
     config.num_classes = len(tag_to_id)
 
     dev = device()
+    if dev.type == "cuda":
+        torch.set_float32_matmul_precision("high")
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cuda.enable_flash_sdp(True)
+        torch.backends.cuda.enable_mem_efficient_sdp(True)
+        torch.backends.cuda.enable_math_sdp(True)
     print_sdp_backend_status()
     tag_embeddings = None
     if config.head_type == "tag_query_head" and config.use_siglip_init:
@@ -99,12 +114,24 @@ def run(config):
     if args.checkpoint:
         stats = transfer_weights(model, tag_to_id, args.checkpoint, weights_key="model_ema", verbose=True)
         print(f"  Transferred {stats['query_transfer_count']} / {stats['new_tag_count']} tag queries")
-    loss_fn = build_loss()
     ema = EMA(model, config.ema_decay)
-    optimizer = AdamW([
-        {"params": model.backbone.parameters(), "lr": config.learning_rate * config.backbone_lr_mult},
-        {"params": model.head.parameters()},
-    ], lr=config.learning_rate, weight_decay=config.weight_decay)
+    if dev.type == "cuda":
+        try:
+            model = torch.compile(model, mode="max-autotune", dynamic=False)
+            print("  [torch.compile] enabled with max-autotune")
+        except Exception as e:
+            print(f"  [torch.compile] failed, using eager mode: {e}")
+    loss_fn = build_loss()
+    try:
+        optimizer = AdamW([
+            {"params": model.backbone.parameters(), "lr": config.learning_rate * config.backbone_lr_mult},
+            {"params": model.head.parameters()},
+        ], lr=config.learning_rate, weight_decay=config.weight_decay, fused=True)
+    except TypeError:
+        optimizer = AdamW([
+            {"params": model.backbone.parameters(), "lr": config.learning_rate * config.backbone_lr_mult},
+            {"params": model.head.parameters()},
+        ], lr=config.learning_rate, weight_decay=config.weight_decay)
     steps = config.epochs * len(train); warmup = config.warmup_epochs * len(train)
     scheduler = LambdaLR(optimizer, lambda step: (step + 1) / max(1, warmup) if step < warmup else 0.5 * (1 + math.cos(math.pi * (step - warmup) / max(1, steps - warmup))))
 
@@ -140,7 +167,7 @@ def run(config):
                 if metrics["map"] > best:
                     best = metrics["map"]
                     ema.apply(model)
-                    best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                    best_state = _clean({k: v.cpu().clone() for k, v in model.state_dict().items()})
                     ema.restore(model)
                     save_checkpoint(config.checkpoint_dir / "best.pt", {"model": best_state, "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row})
             else:
@@ -148,7 +175,7 @@ def run(config):
                 if val_loss < best:
                     best = val_loss
                     ema.apply(model)
-                    best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                    best_state = _clean({k: v.cpu().clone() for k, v in model.state_dict().items()})
                     ema.restore(model)
                     save_checkpoint(config.checkpoint_dir / "best.pt", {"model": best_state, "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row})
                 print(f"Epoch {epoch + 1}/{config.epochs}  train_loss={total / len(train):.6f}  val_loss={val_loss:.6f}  lr={optimizer.param_groups[0]['lr']:.2e}  duration={time.time() - started:.1f}s")
@@ -157,7 +184,7 @@ def run(config):
             print(f"Epoch {epoch + 1}/{config.epochs}  train_loss={total / len(train):.6f}  lr={optimizer.param_groups[0]['lr']:.2e}  duration={time.time() - started:.1f}s")
 
         with (config.run_dir / "metrics.jsonl").open("a") as file: file.write(json.dumps(row) + "\n")
-        state = {"model": model.state_dict(), "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row}
+        state = {"model": _clean(model.state_dict()), "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row}
         save_checkpoint(config.checkpoint_dir / "last.pt", state)
         if config.save_epochs > 0 and (epoch + 1) % config.save_epochs == 0:
             save_checkpoint(config.checkpoint_dir / f"epoch-{epoch + 1}.pt", state)
@@ -166,7 +193,8 @@ def run(config):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(); parser.add_argument("--epochs", type=int); parser.add_argument("--no-wandb", action="store_true"); parser.add_argument("--checkpoint", type=str, default=None, help="Path to pretrained checkpoint for weight transfer")
+    parser = argparse.ArgumentParser(); parser.add_argument("--epochs", type=int); parser.add_argument("--no-wandb", action="store_true"); parser.add_argument("--checkpoint", type=str, default=None, help="Path to pretrained checkpoint for weight transfer"); parser.add_argument("--batch-size", type=int, help="Override batch size (e.g., 128 for RTX 4090)")
     args = parser.parse_args(); config = TrainConfig(); config.no_wandb = args.no_wandb
     if args.epochs: config.epochs = args.epochs
+    if args.batch_size: config.batch_size = args.batch_size
     run(config)
