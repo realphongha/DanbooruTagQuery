@@ -113,6 +113,48 @@ uv run python -m src.infer \
   --top-k 10
 ```
 
+### Web UI
+
+Launch a Gradio web interface:
+
+```bash
+uv run python -m src.infer checkpoints/best.pt --ui
+```
+
+## ONNX Export
+
+Convert a PyTorch checkpoint to ONNX for faster CPU inference or deployment:
+
+```bash
+uv run python -m src.convert_onnx checkpoints/best.pt -o models/model
+```
+
+This produces three files:
+
+| File | Contents |
+|---|---|
+| `models/model.onnx` | Exported ONNX model |
+| `models/model.tag_to_id.json` | Tag name → index mapping |
+| `models/model.config.json` | Export-time config (image size, model name, …) |
+
+### ONNX Inference
+
+Use the ONNX model with the same CLI commands — just pass the `.onnx` file:
+
+```bash
+uv run python -m src.infer image.jpg models/model.onnx --top-k 10
+```
+
+```bash
+uv run python -m src.evaluate models/model.onnx
+```
+
+```bash
+uv run python -m src.infer models/model.onnx --ui
+```
+
+The CLI auto-detects the file extension and uses `onnxruntime` for ONNX files or PyTorch for `.pt` files. No code changes needed.
+
 ## Validation Visualization
 
 Create a grid of validation images with ground-truth and predicted tags:

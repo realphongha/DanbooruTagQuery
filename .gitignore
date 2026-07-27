@@ -4,6 +4,7 @@ runs/*
 wandb/
 *.parquet
 data/*
+!data/.gitkeep
 failed_downloads.csv
 
 # Pi

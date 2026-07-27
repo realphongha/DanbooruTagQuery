@@ -9,33 +9,34 @@ from tqdm import tqdm
 from .config import TrainConfig
 from .dataset import make_loader
 from .metrics import multilabel_metrics, print_metrics
-from .model import ImageTagger
+from .onnx_utils import Predictor, load_tag_to_id, load_config, is_onnx
 from .transforms import val_transforms
 from .utils import device, load_json
 
-def evaluate(checkpoint, config=TrainConfig()):
-    tag_to_id = load_json(config.tag_to_id)
-    config.num_classes = len(tag_to_id)
-    state = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    dev = device()
-    model = ImageTagger(config.model_name, config.num_classes, pretrained=False, head_type=config.head_type)
-    model.load_state_dict(state["model_ema"])
-    model.to(dev).eval()
-    loader = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
-    N = len(loader.dataset)
-    preds = torch.empty(N, config.num_classes, dtype=torch.float32)
-    targets = torch.empty(N, config.num_classes, dtype=torch.float32)
-    offset = 0
-    with torch.no_grad():
-        for batch in tqdm(loader):
-            B = batch["image"].size(0)
-            preds[offset:offset+B] = torch.sigmoid(model(batch["image"].to(dev))).cpu()
-            targets[offset:offset+B] = batch["labels"]
-            offset += B
+def evaluate(checkpoint, config_override=None):
+    predictor = Predictor(checkpoint)
+    tag_to_id = predictor.tag_to_id
+    cfg = predictor.config
+    if config_override and not is_onnx(checkpoint):
+        for k, v in config_override.__dict__.items():
+            if hasattr(cfg, k):
+                setattr(cfg, k, v)
 
-    tag_counts = {tid: int(targets[:, tid].sum().item()) for tid in range(len(tag_to_id))}
-    metrics = multilabel_metrics(preds, targets)
-    del preds, targets
+    loader = make_loader(cfg.val_parquet, cfg, val_transforms(cfg.image_size), False)
+    N = len(loader.dataset)
+    num_classes = len(tag_to_id)
+    preds = np.empty((N, num_classes), dtype=np.float32)
+    targets_np = np.empty((N, num_classes), dtype=np.float32)
+    offset = 0
+
+    for batch in tqdm(loader):
+        B = batch["image"].size(0)
+        preds[offset : offset + B] = predictor.run(batch["image"])
+        targets_np[offset : offset + B] = batch["labels"].numpy()
+        offset += B
+
+    tag_counts = {tid: int(targets_np[:, tid].sum()) for tid in range(num_classes)}
+    metrics = multilabel_metrics(torch.from_numpy(preds), torch.from_numpy(targets_np))
     return metrics, tag_to_id, tag_counts
 
 if __name__ == "__main__":

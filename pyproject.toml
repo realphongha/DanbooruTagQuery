@@ -21,12 +21,22 @@ dependencies = [
     "tqdm>=4.69.0",
     "wandb>=0.18.0",
     "sentencepiece>=0.2.2",
+    "cloudscraper>=1.2.71",
+    "curl-cffi>=0.15.0",
+    "onnx>=1.16.0",
+    "onnxscript>=0.1.0",
 ]
 
 [project.optional-dependencies]
+ui = ["gradio>=5.0.0"]
 arena = [
     "einops>=0.8.0",
     "huggingface-hub>=0.27.0",
     "onnxruntime-gpu>=1.17.0",
     "safetensors>=0.5.0",
+]
+onnx = [
+    "onnx>=1.16.0",
+    "onnxruntime-gpu>=1.18.0",
+    "onnxscript>=0.1.0",
 ]
