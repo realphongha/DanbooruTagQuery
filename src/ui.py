@@ -102,6 +102,8 @@ def build_app(predictor: Predictor):
     #copy-csv-btn { position: absolute; top: 4px; right: 4px; z-index: 10;
                     min-width: 0; padding: 0 6px; height: 24px;
                     font-size: 13px; line-height: 24px; }
+    #clear-cache-btn { min-width: 0; padding: 2px 10px; height: 28px;
+                       font-size: 13px; }
     """
 
     with gr.Blocks(title="DanbooruTagCLIP", theme=gr.themes.Soft(), css=css) as app:
@@ -184,16 +186,14 @@ def build_app(predictor: Predictor):
         # ── status row ──
         with gr.Row():
             status = gr.Markdown("Ready. Load an image and click **Analyze**.")
-            clear_cache_btn = gr.Button("🧹", size="sm", elem_id="clear-cache-btn")
+            clear_cache_btn = gr.Button("🧹 Clear cache", size="sm", elem_id="clear-cache-btn")
 
         # ── tag score query ──
         gr.Markdown("### 🔍 Tag score query")
         with gr.Row():
-            tag_query = gr.Dropdown(
+            tag_query = gr.Textbox(
                 label="Search tag",
-                placeholder="Type tag name to see its score…",
-                allow_custom_value=True,
-                choices=[],
+                placeholder="Type to search…",
                 scale=3,
             )
         tag_query_output = gr.HTML(label="Results")
@@ -369,27 +369,19 @@ def build_app(predictor: Predictor):
             fn=on_analyze,
             inputs=[image_input, url_input],
             outputs=[tag_table, tag_string, status],
-        ).then(
-            fn=lambda: gr.Dropdown(choices=sorted(state.get("tag_metadata", {}).keys())),
-            inputs=[],
-            outputs=[tag_query],
         )
 
         url_input.submit(
             fn=on_analyze,
             inputs=[image_input, url_input],
             outputs=[tag_table, tag_string, status],
-        ).then(
-            fn=lambda: gr.Dropdown(choices=sorted(state.get("tag_metadata", {}).keys())),
-            inputs=[],
-            outputs=[tag_query],
         )
 
         def on_clear():
             state["all_logits"] = None
             state["tag_metadata"] = None
             state["current_image"] = None
-            return None, "", "<i>No results yet.</i>", "Cleared.", gr.Dropdown(choices=[]), ""
+            return None, "", "<i>No results yet.</i>", "Cleared.", "", ""
 
         clear_btn.click(
             fn=on_clear,
@@ -411,22 +403,23 @@ def build_app(predictor: Predictor):
                 outputs=[tag_table, tag_string],
             )
 
-    # tag score query
-        def query_tag_score(tag_name):
+    # tag score query (dynamic search)
+        def query_tag_score(query):
             meta = state.get("tag_metadata")
-            if not meta or tag_name not in meta:
-                return "<i>No results. Run Analyze first.</i>"
-            m = meta[tag_name]
-            cat = m["category_name"] or "?"
-            return (
-                f"<table style='width:100%'>"
-                f"<tr><th>Tag</th><th>Score</th><th>Category</th></tr>"
-                f"<tr>"
-                f"<td>{tag_name}</td>"
-                f"<td>{m['score']:.4f}</td>"
-                f"<td><code>{cat}</code></td>"
-                f"</tr></table>"
+            if not meta or not query:
+                return ""
+            query_l = query.lower()
+            matches = sorted(
+                [(t, meta[t]["score"]) for t in meta if query_l in t.lower()],
+                key=lambda x: x[1], reverse=True,
+            )[:20]
+            if not matches:
+                return "<i>No matching tags.</i>"
+            rows = "".join(
+                f"<tr><td>{t}</td><td>{s:.4f}</td><td><code>{meta[t]['category_name'] or '?'}</code></td></tr>"
+                for t, s in matches
             )
+            return f"<table style='width:100%'><tr><th>Tag</th><th>Score</th><th>Category</th></tr>{rows}</table>"
 
         tag_query.change(
             fn=query_tag_score,
