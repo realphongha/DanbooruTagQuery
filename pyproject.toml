@@ -40,4 +40,3 @@ onnx = [
     "onnxruntime-gpu>=1.18.0",
     "onnxscript>=0.1.0",
 ]
-build = ["pyinstaller>=6.10.0"]
