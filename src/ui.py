@@ -1,5 +1,5 @@
 """
-Gradio web UI for DanbooruTagCLIP inference.
+Gradio web UI for DanbooruTagQuery inference.
 """
 
 from __future__ import annotations
@@ -122,8 +122,8 @@ def build_app(predict_fn):
                        font-size: 13px; }
     """
 
-    with gr.Blocks(title="DanbooruTagCLIP", theme=gr.themes.Soft(), css=css) as app:
-        gr.Markdown("# 🏷️ DanbooruTagCLIP")
+    with gr.Blocks(title="DanbooruTagQuery", theme=gr.themes.Soft(), css=css) as app:
+        gr.Markdown("# 🏷️ DanbooruTagQuery")
 
         with gr.Row():
             # ── left: image + credentials ──

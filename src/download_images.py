@@ -28,7 +28,7 @@ def _get_session():
         session = requests.Session()
         session.auth = (_DANBOORU_USER, _DANBOORU_API_KEY)
         session.headers.update({
-            "User-Agent": f"DanbooruTagCLIP/1.0 (by {_DANBOORU_USER} on Danbooru)",
+            "User-Agent": f"DanbooruTagQuery/1.0 (by {_DANBOORU_USER} on Danbooru)",
             "Referer": "https://danbooru.donmai.us/",
         })
         _session_local.session = session
