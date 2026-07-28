@@ -9,7 +9,6 @@ from pathlib import Path
 
 import gradio as gr
 import numpy as np
-import torch
 from PIL import Image
 
 from .api import (
@@ -19,25 +18,35 @@ from .api import (
     wiki_body,
 )
 from .cache import TagCache
-from .config import TrainConfig
 from .defaults import DEFAULT_TOP_K, DEFAULT_MIN_SCORE
-from .onnx_utils import Predictor
-from .transforms import val_transforms
 
 # ── globals ──────────────────────────────────────────────────────────────────
 
 _CACHE = TagCache()  # module-level, shared across all sessions
 _CATEGORY_NAMES = sorted(CATEGORY_MAP.values())
 
-# ── model helpers ────────────────────────────────────────────────────────────
+_IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+_IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
-@torch.inference_mode()
-def predict_all(image: Image.Image, predictor: Predictor):
-    tensor = predictor.val_transform(image.convert("RGB")).unsqueeze(0)
-    scores = predictor.run(tensor)[0]  # (num_classes,) numpy
-    inv = {v: k for k, v in predictor.tag_to_id.items()}
-    indices = np.argsort(scores)[::-1]
-    return [(inv[int(i)], float(scores[i])) for i in indices]
+
+# ── numpy-only preprocessing ────────────────────────────────────────────────
+
+def _preprocess_numpy(image: Image.Image, image_size: int) -> np.ndarray:
+    """PIL → (1, 3, H, W) float32 array. No torch/torchvision."""
+    w, h = image.size
+    scale = image_size / max(w, h)
+    new_w = int(w * scale)
+    new_h = int(h * scale)
+    image = image.resize((new_w, new_h), Image.BILINEAR)
+    canvas = Image.new("RGB", (image_size, image_size), (0, 0, 0))
+    left = (image_size - new_w) // 2
+    top = (image_size - new_h) // 2
+    canvas.paste(image, (left, top))
+    arr = np.asarray(canvas, dtype=np.float32).transpose(2, 0, 1) / 255.0
+    arr[0] = (arr[0] - _IMAGENET_MEAN[0]) / _IMAGENET_STD[0]
+    arr[1] = (arr[1] - _IMAGENET_MEAN[1]) / _IMAGENET_STD[1]
+    arr[2] = (arr[2] - _IMAGENET_MEAN[2]) / _IMAGENET_STD[2]
+    return arr[np.newaxis, ...]
 
 
 def format_tag(tag: str, use_underscore: bool) -> str:
@@ -86,12 +95,19 @@ def get_tag_description(tag: str) -> str:
 
 # ── Gradio app ───────────────────────────────────────────────────────────────
 
-def build_app(predictor: Predictor):
+def build_app(predict_fn):
+    """Build Gradio app.
+
+    Parameters
+    ----------
+    predict_fn : callable
+        ``predict_fn(pil_image: PIL.Image) -> list[tuple[str, float]]``
+        Returns [(tag, score), …] sorted by score descending.
+    """
     state = {
         "all_logits": None,
         "tag_metadata": None,
         "current_image": None,
-        "predictor": predictor,
     }
 
     # load initial auth info for display
@@ -349,7 +365,7 @@ def build_app(predictor: Predictor):
             state["current_image"] = pil
             import time
             t0 = time.time()
-            all_logits = predict_all(pil, state["predictor"])
+            all_logits = predict_fn(pil)
             state["all_logits"] = all_logits
 
             # enrich with category from cache
@@ -441,7 +457,23 @@ def build_app(predictor: Predictor):
     return app
 
 
-def launch(checkpoint: str, share: bool = False, **kwargs):
-    predictor = Predictor(checkpoint)
-    app = build_app(predictor)
+def launch(predict_fn, share: bool = False, **kwargs):
+    """Launch Gradio UI with a predict function."""
+    app = build_app(predict_fn)
     app.launch(share=share, **kwargs)
+
+
+def launch_from_checkpoint(checkpoint: str, share: bool = False, **kwargs):
+    """Convenience: create Predictor (torch-backed) and launch UI."""
+    from .onnx_utils import Predictor
+
+    predictor = Predictor(checkpoint)
+
+    def _predict(image):
+        tensor = _preprocess_numpy(image.convert("RGB"), predictor.config.image_size)
+        scores = predictor.run(tensor)[0]
+        inv = {v: k for k, v in predictor.tag_to_id.items()}
+        indices = np.argsort(scores)[::-1]
+        return [(inv[int(i)], float(scores[i])) for i in indices]
+
+    launch(_predict, share=share, **kwargs)

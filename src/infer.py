@@ -10,7 +10,6 @@ from .model import ImageTagger
 from .transforms import val_transforms
 from .defaults import DEFAULT_TOP_K, DEFAULT_MIN_SCORE, DEFAULT_IGNORE_FILE
 from .onnx_utils import is_onnx, load_tag_to_id, load_config, Predictor
-from .ui import launch as ui_launch
 
 
 def load_ignored_tags(path="data/ignored_tags.txt"):
@@ -104,22 +103,18 @@ def batch_infer(
             print(f"  FAIL {img_path.name}: {exc}")
 
 
-if __name__ == "__main__":
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("checkpoint")
     parser.add_argument(
         "image",
         nargs="?",
         default=None,
-        help="Image file path (not needed with --ui or --dir)",
+        help="Image file path (not needed with --dir)",
     )
     parser.add_argument("--top-k", type=int, default=DEFAULT_TOP_K)
     parser.add_argument("--min-score", type=float, default=DEFAULT_MIN_SCORE)
     parser.add_argument("--ignore-file", default=DEFAULT_IGNORE_FILE)
-    parser.add_argument("--ui", action="store_true", help="Launch web UI (Gradio)")
-    parser.add_argument(
-        "--share", action="store_true", help="Create public Gradio share link"
-    )
     parser.add_argument(
         "--dir",
         type=Path,
@@ -134,9 +129,7 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.ui:
-        ui_launch(args.checkpoint, share=args.share)
-    elif args.dir is not None:
+    if args.dir is not None:
         ignored = load_ignored_tags(args.ignore_file)
         batch_infer(
             args.dir,
@@ -148,7 +141,7 @@ if __name__ == "__main__":
         )
     else:
         if args.image is None:
-            parser.error("provide an image, --dir, or --ui")
+            parser.error("provide an image or --dir")
         ignored = load_ignored_tags(args.ignore_file)
         results = predict(
             args.image, args.checkpoint, args.top_k, args.min_score, ignored
@@ -162,3 +155,7 @@ if __name__ == "__main__":
             dest = Path(args.image).with_suffix(".txt")
             _save_labels(results, dest, min_score=args.min_score or 0.0)
             print(f"Labels saved to {dest}")
+
+
+if __name__ == "__main__":
+    main()

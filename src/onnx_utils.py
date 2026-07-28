@@ -107,14 +107,20 @@ class Predictor:
             self._sess = None
 
     @torch.inference_mode()
-    def run(self, pixel_values: torch.Tensor) -> np.ndarray:
+    def run(self, pixel_values: torch.Tensor | np.ndarray) -> np.ndarray:
         """Returns sigmoid scores as float32 array of shape (N, num_classes)."""
         if self._sess is not None:
+            if isinstance(pixel_values, torch.Tensor):
+                np_input = pixel_values.cpu().numpy()
+            else:
+                np_input = pixel_values
             raw = self._sess.run(
                 [self._output_name],
-                {self._input_name: pixel_values.numpy()},
+                {self._input_name: np_input},
             )[0]
             return 1.0 / (1.0 + np.exp(-raw))  # sigmoid
 
+        if isinstance(pixel_values, np.ndarray):
+            pixel_values = torch.from_numpy(pixel_values)
         out = self._model(pixel_values.to(self._device))
         return torch.sigmoid(out).cpu().numpy()
