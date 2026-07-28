@@ -53,6 +53,7 @@ def download_tag(
     output_dir: str = "downloads",
     workers: int = 4,
     limit: int | None = None,
+    min_score: int | None = None,
 ):
     # check credentials
     user, masked = get_auth_info()
@@ -73,12 +74,17 @@ def download_tag(
     print(f"Output directory: {out}")
 
     # paginate through all posts
+    query = tag
+    if min_score is not None:
+        query += f" score:>={min_score}"
+    query += " order:id"
+
     page = 1
     all_posts = []
     print(f"Fetching posts for tag '{tag}' …")
     while True:
         print(f"  Page {page} …", end=" ", flush=True)
-        batch = posts(f"{tag} order:id", limit=200, page=page)
+        batch = posts(query, limit=200, page=page)
         if not batch:
             print("empty page, done.")
             break
@@ -156,5 +162,9 @@ if __name__ == "__main__":
         "--limit", type=int, default=None,
         help="Max images to download",
     )
+    parser.add_argument(
+        "--min-score", type=int, default=None,
+        help="Minimum post score (e.g. 100 for score>=100)",
+    )
     args = parser.parse_args()
-    download_tag(args.tag, args.output, args.workers, args.limit)
+    download_tag(args.tag, args.output, args.workers, args.limit, args.min_score)
