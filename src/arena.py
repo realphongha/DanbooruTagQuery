@@ -141,7 +141,8 @@ def main():
     parser.add_argument("--deepdanbooru-checkpoint", type=Path,
                         default=Path("models/deepdanbooru/model-resnet_custom_v3.pt"))
     parser.add_argument("--joytag-model-dir", type=Path, default=Path("models/joytag"))
-    parser.add_argument("--wd-model", type=str, default="swinv2", choices=["vit", "swinv2", "convnext"])
+    parser.add_argument("--wd-model", type=str, default="swinv2",
+                        choices=["vit", "swinv2", "convnext", "eva02-large"])
     parser.add_argument("--mldanbooru-repo-dir", type=Path, default=Path("models/ml-danbooru"))
     parser.add_argument("--mldanbooru-checkpoint", type=str, default=None,
                         help="Checkpoint filename in repo_dir")

@@ -136,11 +136,26 @@ def print_metrics(metrics, tag_to_id, title="Evaluation Results", extra=None, sh
     if show_per_tag:
         print(f"{'-' * 40}")
         print("  Per-tag AP:")
-        sorted_tags = sorted(tag_to_id.keys(), key=lambda t: tag_to_id[t])
-        for tag in sorted_tags:
+
+        # Build (tag, ap, tid) list, filter nan
+        tag_aps = []
+        for tag in tag_to_id:
             tid = tag_to_id[tag]
             ap = metrics.get("per_tag_ap", {}).get(tid, float("nan"))
             if not np.isnan(ap):
-                count_str = f"  #{tag_counts[tid]}" if tag_counts and tid in tag_counts else ""
-                print(f"    {tag:<30s} {ap:.4f}{count_str}")
+                tag_aps.append((tag, ap, tid))
+
+        # Sort by AP descending
+        tag_aps.sort(key=lambda x: x[1], reverse=True)
+
+        top_n = min(10, len(tag_aps))
+        print(f"    Top {top_n} tags (highest AP):")
+        for tag, ap, tid in tag_aps[:top_n]:
+            count_str = f"  #{tag_counts[tid]}" if tag_counts and tid in tag_counts else ""
+            print(f"    {tag:<30s} {ap:.4f}{count_str}")
+
+        print(f"    Worst {min(10, len(tag_aps))} tags (lowest AP):")
+        for tag, ap, tid in tag_aps[-min(10, len(tag_aps)):]:
+            count_str = f"  #{tag_counts[tid]}" if tag_counts and tid in tag_counts else ""
+            print(f"    {tag:<30s} {ap:.4f}{count_str}")
     print(f"{'=' * 40}")
