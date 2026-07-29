@@ -102,9 +102,9 @@ def convert(
     if verbose:
         print(f"Tag map saved:      {tag_map_path}")
         print(f"Config saved:       {config_path}")
-        print(f"Done — {result_path} ({result_path.stat().st_size / 1024:.1f} KB)")
+        print(f"Done — {onnx_path} ({onnx_path.stat().st_size / 1024:.1f} KB)")
 
-    return result_path
+    return onnx_path
 
 
 if __name__ == "__main__":
