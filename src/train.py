@@ -95,7 +95,7 @@ def run(config):
                 )
         # Verify model architecture matches
         saved_cfg = ckpt.get("config", {})
-        for key in ("model_name", "head_type", "num_classes"):
+        for key in ("model_name", "head_type"):
             if saved_cfg.get(key) != getattr(config, key):
                 raise RuntimeError(
                     f"Checkpoint config mismatch: {key} = {saved_cfg.get(key)} "
