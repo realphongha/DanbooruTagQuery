@@ -22,10 +22,20 @@ def is_onnx(path: str | Path) -> bool:
     return Path(path).suffix == ".onnx"
 
 
+def _sidecar_stem(ckpt: Path) -> str:
+    """Strip variant suffixes (.fp16, .mixed) from ONNX filename stem."""
+    stem = ckpt.with_suffix("").stem  # removes .onnx
+    for variant in (".fp16", ".mixed"):
+        if stem.endswith(variant):
+            stem = stem[: -len(variant)]
+            break
+    return stem
+
+
 def load_tag_to_id(checkpoint: str) -> dict[str, int]:
     ckpt = Path(checkpoint)
     if ckpt.suffix == ".onnx":
-        sidecar = ckpt.with_suffix("").with_name(ckpt.stem + ".tag_to_id.json")
+        sidecar = ckpt.with_name(_sidecar_stem(ckpt) + ".tag_to_id.json")
         if sidecar.exists():
             return json.loads(sidecar.read_text())
         raise FileNotFoundError(f"Missing tag map: {sidecar}")
@@ -36,7 +46,7 @@ def load_tag_to_id(checkpoint: str) -> dict[str, int]:
 def load_config(checkpoint: str) -> TrainConfig:
     ckpt = Path(checkpoint)
     if ckpt.suffix == ".onnx":
-        sidecar = ckpt.with_suffix("").with_name(ckpt.stem + ".config.json")
+        sidecar = ckpt.with_name(_sidecar_stem(ckpt) + ".config.json")
         if sidecar.exists():
             data = json.loads(sidecar.read_text())
             cfg = TrainConfig()
