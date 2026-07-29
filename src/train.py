@@ -389,7 +389,12 @@ if __name__ == "__main__":
         config = TrainConfig()
         for field in TrainConfig.__dataclass_fields__:
             if field in ckpt_cfg:
-                setattr(config, field, ckpt_cfg[field])
+                val = ckpt_cfg[field]
+                # Checkpoint stores Paths as strings; restore to Path
+                ann = TrainConfig.__annotations__.get(field)
+                if ann == Path:
+                    val = Path(val)
+                setattr(config, field, val)
         config.no_wandb = args.no_wandb
         config._resume_ckpt = ckpt
         config._resume_path = args.resume
