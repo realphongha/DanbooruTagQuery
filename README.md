@@ -1,4 +1,4 @@
-# DanbooruTagCLIP
+# DanbooruTagQuery
 
 Lightweight multi-label anime image tagger using a pretrained ViT backbone and a linear classification head.
 

@@ -124,7 +124,7 @@ def run(config):
     wandb_run = None
     if is_main and not config.no_wandb:
         import wandb
-        wandb_run = wandb.init(project="danboorutagclip", config=config.to_dict())
+        wandb_run = wandb.init(project="danboorutagquery", config=config.to_dict())
 
     seed_everything(config.seed)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

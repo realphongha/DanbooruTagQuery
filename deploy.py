@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Standalone deployment script for DanbooruTagCLIP.
+Standalone deployment script for DanbooruTagQuery.
 
 Dependencies: onnxruntime / onnxruntime-gpu, numpy, Pillow, gradio
 No PyTorch or torchvision needed.
@@ -180,7 +180,7 @@ def _check_cache(checkpoint: str | Path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="DanbooruTagCLIP - ONNX deploy",
+        description="DanbooruTagQuery - ONNX deploy",
     )
     parser.add_argument("checkpoint", help="Path to .onnx model")
     parser.add_argument(
