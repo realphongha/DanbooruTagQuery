@@ -9,7 +9,30 @@ def seed_everything(seed: int) -> None:
     random.seed(seed); np.random.seed(seed); torch.manual_seed(seed); torch.cuda.manual_seed_all(seed)
 
 def device() -> torch.device:
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    if torch.cuda.is_available() and local_rank < torch.cuda.device_count():
+        return torch.device(local_rank)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def is_distributed() -> bool:
+    return torch.distributed.is_initialized() and torch.distributed.get_world_size() > 1
+
+
+def get_rank() -> int:
+    if torch.distributed.is_initialized():
+        return torch.distributed.get_rank()
+    return 0
+
+
+def get_world_size() -> int:
+    if torch.distributed.is_initialized():
+        return torch.distributed.get_world_size()
+    return 1
+
+
+def rank0_only() -> bool:
+    return get_rank() == 0
 
 def save_checkpoint(path, state) -> None:
     path = Path(path); path.parent.mkdir(parents=True, exist_ok=True); torch.save(state, path)

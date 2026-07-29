@@ -2,7 +2,7 @@ import os
 import pandas as pd
 import torch
 from PIL import Image
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, DistributedSampler
 from .utils import load_json
 
 class DanbooruDataset(Dataset):
@@ -27,7 +27,11 @@ class DanbooruDataset(Dataset):
 
 def make_loader(parquet_path, config, transform, shuffle):
     dataset = DanbooruDataset(parquet_path, config.tag_to_id, transform)
-    kwargs = dict(batch_size=config.batch_size, shuffle=shuffle, pin_memory=True, num_workers=config.num_workers)
+    sampler = None
+    if torch.distributed.is_initialized():
+        sampler = DistributedSampler(dataset, shuffle=shuffle)
+        shuffle = False
+    kwargs = dict(batch_size=config.batch_size, shuffle=shuffle, sampler=sampler, pin_memory=True, num_workers=config.num_workers)
     if config.num_workers > 0: kwargs.update(persistent_workers=True, prefetch_factor=config.prefetch_factor)
     return DataLoader(dataset, **kwargs)
 

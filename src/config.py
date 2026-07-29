@@ -6,7 +6,7 @@ class TrainConfig:
     image_size: int = 448
     batch_size: int = 48
     epochs: int = 20
-    learning_rate: float = 1e-4
+    learning_rate: float = 2e-4
     # batch_size: int = 128
     # epochs: int = 30
     # learning_rate: float = 3e-4
@@ -17,7 +17,8 @@ class TrainConfig:
     num_workers: int = 8
     seed: int = 42
     warmup_epochs: int = 2
-    model_name: str = "vit_base_patch16_dinov3.lvd1689m"
+    model_name: str = "vit_large_patch16_dinov3.lvd1689m"
+    # model_name: str = "vit_base_patch16_dinov3.lvd1689m"
     # model_name: str = "vit_small_patch16_dinov3.lvd1689m"
     train_parquet: Path = Path("data/danbooru2025_train.parquet")
     val_parquet: Path = Path("data/danbooru2025_val.parquet")

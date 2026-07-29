@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import os
 import time
 from contextlib import nullcontext
 from datetime import datetime
@@ -16,7 +17,17 @@ from .losses import build_loss
 from .metrics import multilabel_metrics, print_metrics
 from .model import ImageTagger, transfer_weights
 from .transforms import train_transforms, val_transforms
-from .utils import device, print_sdp_backend_status, save_checkpoint, seed_everything, load_json
+from .utils import (
+    device,
+    is_distributed,
+    get_rank,
+    get_world_size,
+    rank0_only,
+    print_sdp_backend_status,
+    save_checkpoint,
+    seed_everything,
+    load_json,
+)
 
 try:
     from transformers import SiglipModel, SiglipTokenizer
@@ -61,6 +72,11 @@ def run(config):
     tag_to_id = load_json(config.tag_to_id)
     config.num_classes = len(tag_to_id)
 
+    distributed = torch.distributed.is_initialized()
+    rank = get_rank()
+    world_size = get_world_size()
+    is_main = rank == 0
+
     dev = device()
     if dev.type == "cuda":
         torch.set_float32_matmul_precision("high")
@@ -69,69 +85,107 @@ def run(config):
         torch.backends.cuda.enable_flash_sdp(True)
         torch.backends.cuda.enable_mem_efficient_sdp(True)
         torch.backends.cuda.enable_math_sdp(True)
-    print_sdp_backend_status()
+    if is_main:
+        print_sdp_backend_status()
+        if distributed:
+            print(f"  DDP: {world_size} GPUs, rank {rank}")
+
     tag_embeddings = None
     if config.head_type == "tag_query_head" and config.use_siglip_init:
         if SiglipModel is None:
             raise RuntimeError("transformers is required for SigLIP tag query initialization")
-        print("Initializing tag query head with SigLIP...")
-        tags_sorted = sorted(tag_to_id, key=tag_to_id.get)
-        texts = [t.replace("_", " ") for t in tags_sorted]
-
-        siglip = SiglipModel.from_pretrained("google/siglip-base-patch16-224").to(dev).eval()
-        tokenizer = SiglipTokenizer.from_pretrained("google/siglip-base-patch16-224")
-
-        inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
-        inputs = {k: v.to(dev) for k, v in inputs.items()}
-        with torch.no_grad():
-            text_feats = siglip.text_model(**inputs).pooler_output
-
-        text_feats = torch.nn.functional.normalize(text_feats, dim=-1)
-        mean = text_feats.mean(dim=0, keepdim=True)
-        centered = text_feats - mean
-        _, _, Vt = torch.linalg.svd(centered, full_matrices=False)
-        n = min(centered.size(0), Vt.size(0), 384)
-        tag_embeddings = centered @ Vt[:n].T
-        if n < 384:
-            tag_embeddings = torch.cat([tag_embeddings, torch.zeros(tag_embeddings.size(0), 384 - n, device=tag_embeddings.device)], dim=1)
-        tag_embeddings = tag_embeddings.cpu()
+        if is_main:
+            print("Initializing tag query head with SigLIP...")
+            tags_sorted = sorted(tag_to_id, key=tag_to_id.get)
+            texts = [t.replace("_", " ") for t in tags_sorted]
+            siglip = SiglipModel.from_pretrained("google/siglip-base-patch16-224").to(dev).eval()
+            tokenizer = SiglipTokenizer.from_pretrained("google/siglip-base-patch16-224")
+            inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
+            inputs = {k: v.to(dev) for k, v in inputs.items()}
+            with torch.no_grad():
+                text_feats = siglip.text_model(**inputs).pooler_output
+            text_feats = torch.nn.functional.normalize(text_feats, dim=-1)
+            mean = text_feats.mean(dim=0, keepdim=True)
+            centered = text_feats - mean
+            _, _, Vt = torch.linalg.svd(centered, full_matrices=False)
+            n = min(centered.size(0), Vt.size(0), 384)
+            tag_embeddings = centered @ Vt[:n].T
+            if n < 384:
+                tag_embeddings = torch.cat(
+                    [tag_embeddings, torch.zeros(tag_embeddings.size(0), 384 - n)],
+                    dim=1,
+                )
+        if distributed:
+            tag_embeddings = (
+                tag_embeddings if is_main else torch.zeros(len(tag_to_id), 384)
+            )
+            torch.distributed.broadcast(tag_embeddings, src=0)
 
     wandb_run = None
-    if not config.no_wandb:
+    if is_main and not config.no_wandb:
         import wandb
         wandb_run = wandb.init(project="danboorutagclip", config=config.to_dict())
 
     seed_everything(config.seed)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = config.run_dir / timestamp; checkpoint_dir = run_dir / "checkpoints"
-    run_dir.mkdir(parents=True, exist_ok=True); checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    config.run_dir = run_dir; config.checkpoint_dir = checkpoint_dir
+    run_dir = config.run_dir / timestamp
+    checkpoint_dir = run_dir / "checkpoints"
+    if is_main:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    config.run_dir = run_dir
+    config.checkpoint_dir = checkpoint_dir
 
     train = make_loader(config.train_parquet, config, train_transforms(config.image_size), True)
     val = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
 
     model = ImageTagger(config.model_name, config.num_classes, head_type=config.head_type, tag_embeddings=tag_embeddings).to(dev)
     if args.checkpoint:
-        stats = transfer_weights(model, tag_to_id, args.checkpoint, weights_key="model_ema", verbose=True)
-        print(f"  Transferred {stats['query_transfer_count']} / {stats['new_tag_count']} tag queries")
-    ema = EMA(model, config.ema_decay)
+        stats = transfer_weights(model, tag_to_id, args.checkpoint, weights_key="model_ema", verbose=is_main)
+        if is_main:
+            print(f"  Transferred {stats['query_transfer_count']} / {stats['new_tag_count']} tag queries")
+
+    if is_main:
+        ema = EMA(model, config.ema_decay)
+
     if dev.type == "cuda":
+        compile_mode = "default" if distributed else "max-autotune"
         try:
-            model = torch.compile(model, mode="max-autotune", dynamic=False)
-            print("  [torch.compile] enabled with max-autotune")
+            model = torch.compile(model, mode=compile_mode, dynamic=False)
+            if is_main:
+                print(f"  [torch.compile] enabled with {compile_mode}")
         except Exception as e:
-            print(f"  [torch.compile] failed, using eager mode: {e}")
+            if is_main:
+                print(f"  [torch.compile] failed, using eager mode: {e}")
+
+    if distributed:
+        local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+        model = torch.nn.parallel.DistributedDataParallel(
+            model,
+            device_ids=[local_rank],
+            output_device=local_rank,
+            gradient_as_bucket_view=True,
+        )
+
     loss_fn = build_loss()
+
+    backbone_params = (
+        model.module.backbone.parameters() if distributed else model.backbone.parameters()
+    )
+    head_params = (
+        model.module.head.parameters() if distributed else model.head.parameters()
+    )
     try:
         optimizer = AdamW([
-            {"params": model.backbone.parameters(), "lr": config.learning_rate * config.backbone_lr_mult},
-            {"params": model.head.parameters()},
+            {"params": backbone_params, "lr": config.learning_rate * config.backbone_lr_mult},
+            {"params": head_params},
         ], lr=config.learning_rate, weight_decay=config.weight_decay, fused=True)
     except TypeError:
         optimizer = AdamW([
-            {"params": model.backbone.parameters(), "lr": config.learning_rate * config.backbone_lr_mult},
-            {"params": model.head.parameters()},
+            {"params": backbone_params, "lr": config.learning_rate * config.backbone_lr_mult},
+            {"params": head_params},
         ], lr=config.learning_rate, weight_decay=config.weight_decay)
+
     steps = config.epochs * len(train); warmup = config.warmup_epochs * len(train)
     scheduler = LambdaLR(optimizer, lambda step: (step + 1) / max(1, warmup) if step < warmup else 0.5 * (1 + math.cos(math.pi * (step - warmup) / max(1, steps - warmup))))
 
@@ -139,16 +193,26 @@ def run(config):
     amp = dev.type == "cuda"; ctx = torch.autocast(device_type=dev.type, dtype=torch.bfloat16) if amp else nullcontext()
 
     for epoch in range(config.epochs):
+        if distributed and hasattr(train.sampler, "set_epoch"):
+            train.sampler.set_epoch(epoch)
+            if hasattr(val.sampler, "set_epoch"):
+                val.sampler.set_epoch(epoch)
+
         started = time.time(); model.train(); total = 0.0
-        for batch in tqdm(train, desc=f"Epoch {epoch + 1}/{config.epochs}"):
+        train_iter = tqdm(train, desc=f"Epoch {epoch + 1}/{config.epochs}") if is_main else train
+        for batch in train_iter:
             optimizer.zero_grad(set_to_none=True)
             with ctx: loss = loss_fn(model(batch["image"].to(dev, non_blocking=True)), batch["labels"].to(dev, non_blocking=True))
             loss.backward(); optimizer.step(); scheduler.step(); total += loss.item()
-            ema.update(model)
+            if is_main:
+                raw = model.module if distributed else model
+                ema.update(raw)
         should_val = (epoch + 1) % config.val_interval == 0 or epoch == config.epochs - 1
 
         if should_val:
-            ema.apply(model)
+            raw = model.module if distributed else model
+            if is_main:
+                ema.apply(raw)
             model.eval(); losses = []; predictions = []; targets = []
             with torch.no_grad():
                 for batch in val:
@@ -156,45 +220,77 @@ def run(config):
                     losses.append(current.item())
                     if config.compute_multilabel_metrics:
                         predictions.append(torch.sigmoid(logits).float().cpu()); targets.append(batch["labels"].cpu())
-            ema.restore(model)
+            if is_main:
+                ema.restore(raw)
+
+            if distributed:
+                loss_t = torch.tensor(losses, device=dev)
+                gathered = [torch.zeros_like(loss_t) for _ in range(world_size)]
+                torch.distributed.all_gather(gathered, loss_t)
+                losses = torch.cat(gathered).tolist()
 
             val_loss = sum(losses) / len(losses)
 
-            if config.compute_multilabel_metrics:
+            if config.compute_multilabel_metrics and is_main:
                 metrics = multilabel_metrics(torch.cat(predictions), torch.cat(targets))
                 row = {"epoch": epoch + 1, "train_loss": total / len(train), "val_loss": val_loss, **{k: v for k, v in metrics.items() if k != "per_tag_ap"}, "lr": optimizer.param_groups[0]["lr"], "duration": time.time() - started}
                 print_metrics(metrics, tag_to_id, f"Epoch {epoch + 1}/{config.epochs}", extra={"Train loss": total / len(train), "Val loss": val_loss, "LR": optimizer.param_groups[0]["lr"]}, show_per_tag=False)
                 if metrics["map"] > best:
                     best = metrics["map"]
-                    ema.apply(model)
-                    best_state = _clean({k: v.cpu().clone() for k, v in model.state_dict().items()})
-                    ema.restore(model)
+                    ema.apply(raw)
+                    best_state = _clean(raw.state_dict())
+                    ema.restore(raw)
                     save_checkpoint(config.checkpoint_dir / "best.pt", {"model": best_state, "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row})
-            else:
+            elif is_main:
                 row = {"epoch": epoch + 1, "train_loss": total / len(train), "val_loss": val_loss, "lr": optimizer.param_groups[0]["lr"], "duration": time.time() - started}
                 if val_loss < best:
                     best = val_loss
-                    ema.apply(model)
-                    best_state = _clean({k: v.cpu().clone() for k, v in model.state_dict().items()})
-                    ema.restore(model)
+                    ema.apply(raw)
+                    best_state = _clean(raw.state_dict())
+                    ema.restore(raw)
                     save_checkpoint(config.checkpoint_dir / "best.pt", {"model": best_state, "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row})
                 print(f"Epoch {epoch + 1}/{config.epochs}  train_loss={total / len(train):.6f}  val_loss={val_loss:.6f}  lr={optimizer.param_groups[0]['lr']:.2e}  duration={time.time() - started:.1f}s")
         else:
             row = {"epoch": epoch + 1, "train_loss": total / len(train), "lr": optimizer.param_groups[0]["lr"], "duration": time.time() - started}
-            print(f"Epoch {epoch + 1}/{config.epochs}  train_loss={total / len(train):.6f}  lr={optimizer.param_groups[0]['lr']:.2e}  duration={time.time() - started:.1f}s")
+            if is_main:
+                print(f"Epoch {epoch + 1}/{config.epochs}  train_loss={total / len(train):.6f}  lr={optimizer.param_groups[0]['lr']:.2e}  duration={time.time() - started:.1f}s")
 
-        with (config.run_dir / "metrics.jsonl").open("a") as file: file.write(json.dumps(row) + "\n")
-        state = {"model": _clean(model.state_dict()), "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row}
-        save_checkpoint(config.checkpoint_dir / "last.pt", state)
-        if config.save_epochs > 0 and (epoch + 1) % config.save_epochs == 0:
-            save_checkpoint(config.checkpoint_dir / f"epoch-{epoch + 1}.pt", state)
-        if wandb_run: wandb_run.log(row)
+        if is_main:
+            with (config.run_dir / "metrics.jsonl").open("a") as file: file.write(json.dumps(row) + "\n")
+            raw = model.module if distributed else model
+            state = {"model": _clean(raw.state_dict()), "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row}
+            save_checkpoint(config.checkpoint_dir / "last.pt", state)
+            if config.save_epochs > 0 and (epoch + 1) % config.save_epochs == 0:
+                save_checkpoint(config.checkpoint_dir / f"epoch-{epoch + 1}.pt", state)
+            if wandb_run: wandb_run.log(row)
     if wandb_run: wandb_run.finish()
+    if distributed:
+        torch.distributed.barrier()
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(); parser.add_argument("--epochs", type=int); parser.add_argument("--no-wandb", action="store_true"); parser.add_argument("--checkpoint", type=str, default=None, help="Path to pretrained checkpoint for weight transfer"); parser.add_argument("--batch-size", type=int, help="Override batch size (e.g., 128 for RTX 4090)")
-    args = parser.parse_args(); config = TrainConfig(); config.no_wandb = args.no_wandb
-    if args.epochs: config.epochs = args.epochs
-    if args.batch_size: config.batch_size = args.batch_size
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--epochs", type=int)
+    parser.add_argument("--no-wandb", action="store_true")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Path to pretrained checkpoint for weight transfer")
+    parser.add_argument("--batch-size", type=int,
+                        help="Override batch size per GPU (e.g., 24 for 2x4090)")
+    args = parser.parse_args()
+
+    local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
+    if local_rank >= 0:
+        torch.distributed.init_process_group(backend="nccl")
+        torch.cuda.set_device(local_rank)
+
+    config = TrainConfig()
+    config.no_wandb = args.no_wandb
+    if args.epochs:
+        config.epochs = args.epochs
+    if args.batch_size:
+        config.batch_size = args.batch_size
+
     run(config)
+
+    if torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
