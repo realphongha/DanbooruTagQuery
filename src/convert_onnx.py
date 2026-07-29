@@ -131,11 +131,26 @@ def convert(
                       "(pip install onnx onnxconverter-common)")
 
         model_onnx = onnx.load(str(onnx_path))
+        # Ensure clean type info before handing off to auto_mixed_precision
+        # (its internal ORT sessions require consistent output types)
+        try:
+            model_onnx = onnx.shape_inference.infer_shapes(model_onnx)
+        except Exception:
+            pass  # shape inference may fail on some models, proceed anyway
         feed_dict = {"pixel_values": dummy.numpy()}
-        model_mixed = auto_mixed_precision.auto_convert_mixed_precision(
-            model_onnx, feed_dict, rtol=rtol, atol=atol, keep_io_types=keep_io_types,
-        )
-        model_mixed = onnx.shape_inference.infer_shapes(model_mixed)
+        try:
+            model_mixed = auto_mixed_precision.auto_convert_mixed_precision(
+                model_onnx, feed_dict, rtol=rtol, atol=atol, keep_io_types=keep_io_types,
+            )
+        except Exception as exc:
+            sys.exit(
+                f"error: auto_mixed_precision failed ({exc}).\n"
+                f"  Try --fp16 instead (full FP16 conversion)."
+            )
+        try:
+            model_mixed = onnx.shape_inference.infer_shapes(model_mixed)
+        except Exception:
+            pass  # shape inference may fail on converted model, save anyway
         mixed_path = out.with_suffix(".mixed.onnx")
         onnx.save(model_mixed, str(mixed_path))
         result_path = mixed_path
