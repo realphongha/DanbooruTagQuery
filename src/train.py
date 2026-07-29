@@ -211,7 +211,7 @@ def run(config):
         # weights are identical across ranks — rank 0's EMA is correct for all.
         ema = EMA(model, config.ema_decay)
         if config._resume_ckpt is not None and "model_ema" in config._resume_ckpt:
-            ema.shadow = config._resume_ckpt["model_ema"]
+            ema.shadow = {k: v.to(dev) for k, v in config._resume_ckpt["model_ema"].items()}
 
     if dev.type == "cuda":
         compile_mode = "default" if distributed else "max-autotune"
