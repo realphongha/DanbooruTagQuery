@@ -746,6 +746,7 @@ dependencies = [
     { name = "datasets" },
     { name = "matplotlib" },
     { name = "onnx" },
+    { name = "onnxruntime-gpu" },
     { name = "onnxscript" },
     { name = "pandas" },
     { name = "pillow" },
@@ -767,16 +768,10 @@ dependencies = [
 arena = [
     { name = "einops" },
     { name = "huggingface-hub" },
-    { name = "onnxruntime-gpu" },
     { name = "safetensors" },
 ]
 build = [
     { name = "pyinstaller" },
-]
-onnx = [
-    { name = "onnx" },
-    { name = "onnxruntime-gpu" },
-    { name = "onnxscript" },
 ]
 ui = [
     { name = "gradio" },
@@ -791,12 +786,9 @@ requires-dist = [
     { name = "gradio", marker = "extra == 'ui'", specifier = ">=5.0.0" },
     { name = "huggingface-hub", marker = "extra == 'arena'", specifier = ">=0.27.0" },
     { name = "matplotlib", specifier = ">=3.11.1" },
-    { name = "onnx", specifier = ">=1.16.0" },
-    { name = "onnx", marker = "extra == 'onnx'", specifier = ">=1.16.0" },
-    { name = "onnxruntime-gpu", marker = "extra == 'arena'", specifier = ">=1.17.0" },
-    { name = "onnxruntime-gpu", marker = "extra == 'onnx'", specifier = ">=1.18.0" },
-    { name = "onnxscript", specifier = ">=0.1.0" },
-    { name = "onnxscript", marker = "extra == 'onnx'", specifier = ">=0.1.0" },
+    { name = "onnx", specifier = ">=1.22.0" },
+    { name = "onnxruntime-gpu", specifier = ">=1.28.0" },
+    { name = "onnxscript", specifier = ">=0.7.1" },
     { name = "pandas", specifier = ">=3.0.5" },
     { name = "pillow", specifier = ">=12.3.0" },
     { name = "pyarrow", specifier = ">=25.0.0" },
@@ -814,7 +806,7 @@ requires-dist = [
     { name = "transformers", specifier = ">=4.56.0" },
     { name = "wandb", specifier = ">=0.18.0" },
 ]
-provides-extras = ["ui", "arena", "onnx", "build"]
+provides-extras = ["ui", "arena", "build"]
 
 [[package]]
 name = "datasets"
