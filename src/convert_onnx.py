@@ -114,9 +114,15 @@ def convert(
         model_fp16 = float16.convert_float_to_float16(
             model_onnx, keep_io_types=keep_io_types
         )
-        model_fp16 = onnx.shape_inference.infer_shapes(model_fp16)
+        try:
+            model_fp16 = onnx.shape_inference.infer_shapes(model_fp16)
+        except Exception as e:
+            print(f"warning: shape inference failed after FP16 conversion: {e}")
         _fix_cast_node_attrs(model_fp16)
-        model_fp16 = onnx.shape_inference.infer_shapes(model_fp16)
+        try:
+            model_fp16 = onnx.shape_inference.infer_shapes(model_fp16)
+        except Exception as e:
+            print(f"warning: shape inference failed after Cast fix: {e}")
         fp16_path = out.with_suffix(".fp16.onnx")
         onnx.save(model_fp16, str(fp16_path))
         result_path = fp16_path
@@ -134,14 +140,29 @@ def convert(
                       "(pip install onnx onnxconverter-common)")
 
         model_onnx = onnx.load(str(onnx_path))
-        # Fix any Cast attrs on the FP32 model before handing off to
-        # auto_mixed_precision — its internal ORT sessions will reject
-        # mismatched types (converter bug #320).
+        # Monkey-patch float16.convert_float_to_float16 so every internal
+        # call inside auto_mixed_precision gets our Cast attr fix applied.
+        # Without this, ORT InferenceSession creation fails with type mismatch
+        # because the library doesn't patch Cast 'to' attributes (bug #320).
+        import onnxconverter_common.float16 as float16_mod
+        original_convert = float16_mod.convert_float_to_float16
+
+        def _patched_convert(model, *args, **kwargs):
+            result = original_convert(model, *args, **kwargs)
+            try:
+                result = onnx.shape_inference.infer_shapes(result)
+            except Exception:
+                pass
+            _fix_cast_node_attrs(result)
+            return result
+
+        float16_mod.convert_float_to_float16 = _patched_convert
         try:
             model_onnx = onnx.shape_inference.infer_shapes(model_onnx)
+        except Exception as e:
+            print(f"warning: shape inference failed before mixed conversion: {e}")
+        else:
             _fix_cast_node_attrs(model_onnx)
-        except Exception:
-            pass
         feed_dict = {"pixel_values": dummy.numpy()}
         try:
             model_mixed = auto_mixed_precision.auto_convert_mixed_precision(
@@ -154,9 +175,13 @@ def convert(
             )
         try:
             model_mixed = onnx.shape_inference.infer_shapes(model_mixed)
+        except Exception as e:
+            print(f"warning: shape inference failed after mixed conversion: {e}")
+        else:
             _fix_cast_node_attrs(model_mixed)
-        except Exception:
-            pass
+        finally:
+            # Restore original convert_float_to_float16
+            float16_mod.convert_float_to_float16 = original_convert
         mixed_path = out.with_suffix(".mixed.onnx")
         onnx.save(model_mixed, str(mixed_path))
         result_path = mixed_path

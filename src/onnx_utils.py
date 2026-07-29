@@ -123,8 +123,8 @@ def _onnx_cast_outputs_to_float32(onnx_path: str) -> str:
     # Step 1: propagate types so _fix_cast_node_attrs can see them
     try:
         model = shape_inference.infer_shapes(model)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"warning: shape inference failed for {onnx_path}: {e}")
 
     # Step 2: fix Cast node 'to' attributes mismatched by converter bug (#320)
     _fix_cast_node_attrs(model)
@@ -132,8 +132,8 @@ def _onnx_cast_outputs_to_float32(onnx_path: str) -> str:
     # Step 3: re-propagate types after fixing Cast attrs
     try:
         model = shape_inference.infer_shapes(model)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"warning: shape inference failed after Cast fix for {onnx_path}: {e}")
 
     # Step 4: build type map from value_info (post-fix) + inputs
     type_map: dict[str, int] = {}
