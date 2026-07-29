@@ -87,30 +87,42 @@ def _onnx_cast_outputs_to_float32(onnx_path: str) -> str:
     except Exception:
         pass
 
-    # Build type map from value_info (post-inference) + inputs + outputs
+    # Build type map from value_info (post-inference) ONLY — output
+    # declarations still say float32 and would shadow inferred types.
     type_map: dict[str, int] = {}
-    for vi in list(model.graph.value_info) + list(model.graph.input) + list(model.graph.output):
+    for vi in list(model.graph.value_info) + list(model.graph.input):
         try:
             type_map[vi.name] = vi.type.tensor_type.elem_type
         except Exception:
             pass
 
-    # Detect FP16: check declared type + inferred type for each output
-    needs_fix = False
-    for o in model.graph.output:
-        declared = o.type.tensor_type.elem_type
-        inferred = type_map.get(o.name)
-        if declared == TensorProto.FLOAT16 or inferred == TensorProto.FLOAT16:
-            needs_fix = True
-            break
-
+    # Detect FP16: prefer inferred types, fall back to declared types
+    needs_fix = any(
+        type_map.get(o.name) == TensorProto.FLOAT16
+        for o in model.graph.output
+    )
+    if not needs_fix:
+        # fallback: check declared output types directly
+        needs_fix = any(
+            o.type.tensor_type.elem_type == TensorProto.FLOAT16
+            for o in model.graph.output
+        )
+    if not needs_fix:
+        # last resort: check if any Cast node in the graph targets float16
+        has_fp16_cast = any(
+            n.op_type == "Cast"
+            and any(
+                getattr(attr, "i", None) == TensorProto.FLOAT16
+                for attr in n.attribute
+            )
+            for n in model.graph.node
+        )
+        needs_fix = has_fp16_cast
     if not needs_fix:
         return onnx_path
 
     for output in model.graph.output:
-        declared = output.type.tensor_type.elem_type
-        inferred = type_map.get(output.name)
-        if declared != TensorProto.FLOAT16 and inferred != TensorProto.FLOAT16:
+        if type_map.get(output.name) != TensorProto.FLOAT16:
             continue
 
         orig_name = output.name
