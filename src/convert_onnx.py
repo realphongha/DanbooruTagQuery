@@ -19,16 +19,21 @@ def convert(
     checkpoint: str,
     output: str | None = None,
     opset: int = 18,
+    fp16: bool = False,
+    keep_io_types: bool = True,
     verbose: bool = True,
 ) -> Path:
     """Export a trained checkpoint to ONNX.
 
     Produces three files alongside *output*:
-        <output>.onnx             — the ONNX model
+        <output>.onnx             — the ONNX model (FP32)
         <output>.tag_to_id.json   — tag name → index mapping
         <output>.config.json      — export-time config metadata
 
-    Returns the path to the ONNX file.
+    When *fp16* is True the model is additionally converted to FP16
+    and saved as <output>.fp16.onnx.
+
+    Returns the path to the ONNX file (FP16 path if *fp16* is True).
     """
     chk = Path(checkpoint)
     if output is None:
@@ -63,7 +68,7 @@ def convert(
     model.load_state_dict(weights)
     model.eval()
 
-    # ── export ──
+    # ── export FP32 ONNX ──
     dummy = torch.randn(1, 3, config.image_size, config.image_size)
     onnx_path = out.with_suffix(".onnx")
 
@@ -86,6 +91,27 @@ def convert(
     except TypeError:
         torch.onnx.export(model, dummy, str(onnx_path), **export_kwargs)
 
+    result_path = onnx_path
+
+    # ── FP16 conversion ──
+    if fp16:
+        try:
+            import onnx
+            from onnxconverter_common import float16
+        except ImportError:
+            sys.exit("error: --fp16 requires 'onnx' and 'onnxconverter-common' "
+                      "(pip install onnx onnxconverter-common)")
+
+        model_onnx = onnx.load(str(onnx_path))
+        model_fp16 = float16.convert_float_to_float16(
+            model_onnx, keep_io_types=keep_io_types
+        )
+        result_path = out.with_suffix(".fp16.onnx")
+        onnx.save(model_fp16, str(result_path))
+
+        if verbose:
+            print(f"Converted to FP16:  {result_path} ({result_path.stat().st_size / 1024:.1f} KB)")
+
     # ── save metadata ──
     tag_map_path = out.with_name(out.stem + ".tag_to_id.json")
     Path(tag_map_path).write_text(json.dumps(tag_to_id, indent=2))
@@ -102,9 +128,11 @@ def convert(
     if verbose:
         print(f"Tag map saved:      {tag_map_path}")
         print(f"Config saved:       {config_path}")
-        print(f"Done — {onnx_path} ({onnx_path.stat().st_size / 1024:.1f} KB)")
+        if fp16:
+            print(f"FP32 ONNX:          {onnx_path} ({onnx_path.stat().st_size / 1024:.1f} KB)")
+        print(f"Done — {result_path} ({result_path.stat().st_size / 1024:.1f} KB)")
 
-    return onnx_path
+    return result_path
 
 
 if __name__ == "__main__":
@@ -118,5 +146,13 @@ if __name__ == "__main__":
         "--opset", type=int, default=18,
         help="ONNX opset version (default: 18)",
     )
+    parser.add_argument(
+        "--fp16", action="store_true",
+        help="Convert exported ONNX to FP16 via onnxconverter-common",
+    )
+    parser.add_argument(
+        "--no-keep-io-types", action="store_false", dest="keep_io_types",
+        help="Convert input/output tensors to float16 (default: keep as float32)",
+    )
     args = parser.parse_args()
-    convert(args.checkpoint, args.output, args.opset)
+    convert(args.checkpoint, args.output, args.opset, args.fp16, args.keep_io_types)
