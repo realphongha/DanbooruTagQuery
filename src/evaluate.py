@@ -56,13 +56,19 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size for dataloader")
     parser.add_argument("--cfg", type=str, default=None, help="Path to config.json (overrides auto-detected sidecar)")
     parser.add_argument("--tags", type=str, default=None, help="Path to tag_to_id.json (overrides auto-detected sidecar)")
+    parser.add_argument("--parquet", type=str, default=None, help="Override validation parquet path")
     args = parser.parse_args()
 
     run_name = args.run_name or Path(args.checkpoint).stem
     out_dir = Path("runs")
     out_dir.mkdir(exist_ok=True)
 
-    config_override = argparse.Namespace(batch_size=args.batch_size) if args.batch_size else None
+    config_override = argparse.Namespace()
+    if args.batch_size:
+        config_override.batch_size = args.batch_size
+    if args.parquet:
+        config_override.val_parquet = Path(args.parquet)
+    config_override = config_override if vars(config_override) else None
     metrics, tag_to_id, tag_counts = evaluate(args.checkpoint, config_override=config_override, cfg_path=args.cfg, tags_path=args.tags)
     print_metrics(metrics, tag_to_id, tag_counts=tag_counts)
 
