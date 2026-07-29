@@ -110,6 +110,12 @@ def convert(
             sys.exit("error: --fp16 requires 'onnx' and 'onnxconverter-common' "
                       "(pip install onnx onnxconverter-common)")
 
+        import warnings
+        warnings.filterwarnings(
+            "ignore",
+            message=r"the float32 number .* will be truncated",
+        )
+
         model_onnx = onnx.load(str(onnx_path))
         model_fp16 = float16.convert_float_to_float16(
             model_onnx, keep_io_types=keep_io_types
