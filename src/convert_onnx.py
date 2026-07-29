@@ -22,7 +22,7 @@ def convert(
     opset: int = 18,
     fp16: bool = False,
     mixed: bool = False,
-    keep_io_types: bool = False,
+    keep_io_types: bool = True,
     rtol: float = 0.01,
     atol: float = 0.001,
     verbose: bool = True,
@@ -216,8 +216,8 @@ if __name__ == "__main__":
         help="Convert exported ONNX to FP16 via onnxconverter-common",
     )
     parser.add_argument(
-        "--keep-io-types", action="store_true", default=False,
-        help="Keep input/output tensors as float32 instead of converting to float16",
+        "--no-keep-io-types", action="store_true", default=False,
+        help="Convert input/output tensors to float16 (default: keep as float32)",
     )
     parser.add_argument(
         "--mixed", action="store_true",
@@ -234,5 +234,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     convert(args.checkpoint, args.output, args.opset,
             fp16=args.fp16, mixed=args.mixed,
-            keep_io_types=args.keep_io_types,
+            keep_io_types=not args.no_keep_io_types,
             rtol=args.rtol, atol=args.atol)
