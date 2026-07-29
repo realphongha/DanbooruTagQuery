@@ -67,20 +67,30 @@ def load_config(checkpoint: str) -> TrainConfig:
 
 
 def _fix_cast_node_attrs(model: "onnx.ModelProto") -> bool:
-    """Fix Cast node 'to' attributes that mismatch inferred output types.
+    """Fix Cast node 'to' attributes that mismatch declared output types.
 
     ``convert_float_to_float16`` has a bug (microsoft/onnxconverter-common#320)
     where it marks Cast node outputs as float16 but leaves the node's ``to``
     attribute as float32, creating a type mismatch that ORT rejects.
 
-    *model* must already have ``value_info`` populated (run
-    ``shape_inference.infer_shapes`` before calling).
+    Works without shape inference by checking graph inputs/outputs + value_info.
 
     Returns True if any attribute was fixed.
     """
     from onnx import TensorProto
 
+    # Build type map from all available sources
     type_map: dict[str, int] = {}
+    for vi in model.graph.input:
+        try:
+            type_map[vi.name] = vi.type.tensor_type.elem_type
+        except Exception:
+            pass
+    for vi in model.graph.output:
+        try:
+            type_map[vi.name] = vi.type.tensor_type.elem_type
+        except Exception:
+            pass
     for vi in model.graph.value_info:
         try:
             type_map[vi.name] = vi.type.tensor_type.elem_type
@@ -120,22 +130,16 @@ def _onnx_cast_outputs_to_float32(onnx_path: str) -> str:
 
     model = onnx.load(str(onnx_path))
 
-    # Step 1: propagate types so _fix_cast_node_attrs can see them
+    # Step 1: fix Cast node 'to' attributes mismatched by converter bug (#320)
+    _fix_cast_node_attrs(model)
+
+    # Step 2: propagate types after fixing Cast attrs
     try:
         model = shape_inference.infer_shapes(model)
     except Exception as e:
         print(f"warning: shape inference failed for {onnx_path}: {e}")
 
-    # Step 2: fix Cast node 'to' attributes mismatched by converter bug (#320)
-    _fix_cast_node_attrs(model)
-
-    # Step 3: re-propagate types after fixing Cast attrs
-    try:
-        model = shape_inference.infer_shapes(model)
-    except Exception as e:
-        print(f"warning: shape inference failed after Cast fix for {onnx_path}: {e}")
-
-    # Step 4: build type map from value_info (post-fix) + inputs
+    # Step 3: build type map from value_info (post-fix) + inputs
     type_map: dict[str, int] = {}
     for vi in list(model.graph.value_info) + list(model.graph.input):
         try:
