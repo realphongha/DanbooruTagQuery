@@ -110,15 +110,18 @@ def convert(
             sys.exit("error: --fp16 requires 'onnx' and 'onnxconverter-common' "
                       "(pip install onnx onnxconverter-common)")
 
-        import warnings
-        warnings.filterwarnings(
-            "ignore",
-            message=r"the float32 number .* will be truncated",
-        )
-
+        # Pass min_positive_val=0 and max_finite_val=np.inf to let FP16
+        # handle underflow/overflow naturally. The library default clamps
+        # tiny values (< 1e-7) up to 1e-7 instead of zeroing them, which
+        # is harmful — replacing "effectively zero" with non-zero degrades
+        # accuracy more than native FP16 underflow.
+        import numpy as np
         model_onnx = onnx.load(str(onnx_path))
         model_fp16 = float16.convert_float_to_float16(
-            model_onnx, keep_io_types=keep_io_types
+            model_onnx,
+            keep_io_types=keep_io_types,
+            min_positive_val=0.0,
+            max_finite_val=np.inf,
         )
         _fix_cast_node_attrs(model_fp16)
         try:
