@@ -13,10 +13,20 @@ from .onnx_utils import Predictor, load_tag_to_id, load_config, is_onnx
 from .transforms import val_transforms
 from .utils import device, load_json
 
-def evaluate(checkpoint, config_override=None):
+def evaluate(checkpoint, config_override=None, cfg_path=None, tags_path=None):
     predictor = Predictor(checkpoint)
     tag_to_id = predictor.tag_to_id
     cfg = predictor.config
+
+    # Override auto-detected sidecar files with explicit paths
+    if cfg_path:
+        data = json.loads(Path(cfg_path).read_text())
+        for k, v in data.items():
+            if hasattr(cfg, k):
+                setattr(cfg, k, v)
+    if tags_path:
+        tag_to_id = json.loads(Path(tags_path).read_text())
+
     if config_override:
         for k, v in config_override.__dict__.items():
             if hasattr(cfg, k):
@@ -44,6 +54,8 @@ if __name__ == "__main__":
     parser.add_argument("checkpoint")
     parser.add_argument("--run-name", default=None, help="Run name for output files (default: checkpoint stem)")
     parser.add_argument("--batch-size", type=int, default=None, help="Override batch size for dataloader")
+    parser.add_argument("--cfg", type=str, default=None, help="Path to config.json (overrides auto-detected sidecar)")
+    parser.add_argument("--tags", type=str, default=None, help="Path to tag_to_id.json (overrides auto-detected sidecar)")
     args = parser.parse_args()
 
     run_name = args.run_name or Path(args.checkpoint).stem
@@ -51,7 +63,7 @@ if __name__ == "__main__":
     out_dir.mkdir(exist_ok=True)
 
     config_override = argparse.Namespace(batch_size=args.batch_size) if args.batch_size else None
-    metrics, tag_to_id, tag_counts = evaluate(args.checkpoint, config_override=config_override)
+    metrics, tag_to_id, tag_counts = evaluate(args.checkpoint, config_override=config_override, cfg_path=args.cfg, tags_path=args.tags)
     print_metrics(metrics, tag_to_id, tag_counts=tag_counts)
 
     txt_path = out_dir / f"{run_name}_eval.txt"
