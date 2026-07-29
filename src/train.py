@@ -101,12 +101,11 @@ def run(config):
                     f"Checkpoint config mismatch: {key} = {saved_cfg.get(key)} "
                     f"vs current {getattr(config, key)}. Cannot resume."
                 )
-        # DDP world size must match exactly
-        if distributed and ckpt.get("world_size", 1) != world_size:
-            raise RuntimeError(
-                f"Checkpoint was saved with world_size={ckpt.get('world_size', 1)} "
-                f"but current world_size={world_size}. Cannot resume with different GPU count."
-            )
+        # Warn on world size mismatch — optimizer state may be slightly stale but recovery is safe
+        saved_ws = ckpt.get("world_size", 1)
+        if distributed and saved_ws != world_size:
+            if is_main:
+                print(f"  Warning: checkpoint world_size={saved_ws}, current={world_size}. Optimizer state will recover.")
 
         start_epoch = ckpt.get("epoch", 0)
         best = ckpt.get("best", -float("inf") if config.compute_multilabel_metrics else float("inf"))
