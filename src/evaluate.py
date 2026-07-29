@@ -17,7 +17,7 @@ def evaluate(checkpoint, config_override=None):
     predictor = Predictor(checkpoint)
     tag_to_id = predictor.tag_to_id
     cfg = predictor.config
-    if config_override and not is_onnx(checkpoint):
+    if config_override:
         for k, v in config_override.__dict__.items():
             if hasattr(cfg, k):
                 setattr(cfg, k, v)
@@ -43,13 +43,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("checkpoint")
     parser.add_argument("--run-name", default=None, help="Run name for output files (default: checkpoint stem)")
+    parser.add_argument("--batch-size", type=int, default=None, help="Override batch size for dataloader")
     args = parser.parse_args()
 
     run_name = args.run_name or Path(args.checkpoint).stem
     out_dir = Path("runs")
     out_dir.mkdir(exist_ok=True)
 
-    metrics, tag_to_id, tag_counts = evaluate(args.checkpoint)
+    config_override = argparse.Namespace(batch_size=args.batch_size) if args.batch_size else None
+    metrics, tag_to_id, tag_counts = evaluate(args.checkpoint, config_override=config_override)
     print_metrics(metrics, tag_to_id, tag_counts=tag_counts)
 
     txt_path = out_dir / f"{run_name}_eval.txt"
