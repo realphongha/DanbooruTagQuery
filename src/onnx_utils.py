@@ -69,6 +69,10 @@ def load_config(checkpoint: str) -> TrainConfig:
 def _onnx_cast_outputs_to_float32(onnx_path: str) -> str:
     """Cast any float16 graph outputs to float32 for CPU EP compatibility.
 
+    Checks both declared output types and inferred types from shape
+    inference — the FP16 converter may leave output declarations as
+    float32 even when the producing node outputs float16.
+
     Returns the path to the fixed model (same path if no fix needed, otherwise
     a temp file that should be cleaned up by the caller).
     """
@@ -77,15 +81,36 @@ def _onnx_cast_outputs_to_float32(onnx_path: str) -> str:
 
     model = onnx.load(str(onnx_path))
 
-    needs_fix = any(
-        o.type.tensor_type.elem_type == TensorProto.FLOAT16
-        for o in model.graph.output
-    )
+    # Run shape inference to propagate types through the graph
+    try:
+        model = onnx.shape_inference.infer_shapes(model)
+    except Exception:
+        pass
+
+    # Build type map from value_info (post-inference) + inputs + outputs
+    type_map: dict[str, int] = {}
+    for vi in list(model.graph.value_info) + list(model.graph.input) + list(model.graph.output):
+        try:
+            type_map[vi.name] = vi.type.tensor_type.elem_type
+        except Exception:
+            pass
+
+    # Detect FP16: check declared type + inferred type for each output
+    needs_fix = False
+    for o in model.graph.output:
+        declared = o.type.tensor_type.elem_type
+        inferred = type_map.get(o.name)
+        if declared == TensorProto.FLOAT16 or inferred == TensorProto.FLOAT16:
+            needs_fix = True
+            break
+
     if not needs_fix:
         return onnx_path
 
     for output in model.graph.output:
-        if output.type.tensor_type.elem_type != TensorProto.FLOAT16:
+        declared = output.type.tensor_type.elem_type
+        inferred = type_map.get(output.name)
+        if declared != TensorProto.FLOAT16 and inferred != TensorProto.FLOAT16:
             continue
 
         orig_name = output.name
@@ -103,8 +128,6 @@ def _onnx_cast_outputs_to_float32(onnx_path: str) -> str:
         # Redirect graph output to the Cast node's output
         output.name = cast_name
         output.type.tensor_type.elem_type = TensorProto.FLOAT
-
-    model = onnx.shape_inference.infer_shapes(model)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".onnx", delete=False)
     onnx.save(model, tmp.name)
@@ -144,11 +167,12 @@ class Predictor:
                 self._sess = _try_load(self.checkpoint, providers)
             except Exception:
                 # fallback: CPU only; fix FP16 outputs if needed
-                fixed = _onnx_cast_outputs_to_float32(self.checkpoint)
+                fixed = None
                 try:
+                    fixed = _onnx_cast_outputs_to_float32(self.checkpoint)
                     self._sess = _try_load(fixed, ["CPUExecutionProvider"])
                 finally:
-                    if fixed != self.checkpoint:
+                    if fixed is not None and fixed != self.checkpoint:
                         Path(fixed).unlink(missing_ok=True)
 
             self._input_name = self._sess.get_inputs()[0].name
