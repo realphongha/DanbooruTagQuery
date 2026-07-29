@@ -114,6 +114,22 @@ def convert(
             model_onnx, keep_io_types=keep_io_types
         )
         model_fp16 = onnx.shape_inference.infer_shapes(model_fp16)
+        # Fix Cast node 'to' attrs left float32 by converter bug (#320)
+        for node in model_fp16.graph.node:
+            if node.op_type != "Cast":
+                continue
+            for attr in node.attribute:
+                if attr.name == "to":
+                    cur = attr.i
+                    for out_name in node.output:
+                        for vi in model_fp16.graph.value_info:
+                            if vi.name == out_name:
+                                expected = vi.type.tensor_type.elem_type
+                                if expected != cur:
+                                    attr.i = expected
+                                break
+                    break
+        model_fp16 = onnx.shape_inference.infer_shapes(model_fp16)
         fp16_path = out.with_suffix(".fp16.onnx")
         onnx.save(model_fp16, str(fp16_path))
         result_path = fp16_path
@@ -150,7 +166,22 @@ def convert(
         try:
             model_mixed = onnx.shape_inference.infer_shapes(model_mixed)
         except Exception:
-            pass  # shape inference may fail on converted model, save anyway
+            pass
+        # Fix Cast node 'to' attrs left float32 by converter bug (#320)
+        for node in model_mixed.graph.node:
+            if node.op_type != "Cast":
+                continue
+            for attr in node.attribute:
+                if attr.name == "to":
+                    cur = attr.i
+                    for out_name in node.output:
+                        for vi in model_mixed.graph.value_info:
+                            if vi.name == out_name:
+                                expected = vi.type.tensor_type.elem_type
+                                if expected != cur:
+                                    attr.i = expected
+                                break
+                    break
         mixed_path = out.with_suffix(".mixed.onnx")
         onnx.save(model_mixed, str(mixed_path))
         result_path = mixed_path
