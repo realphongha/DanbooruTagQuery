@@ -98,7 +98,7 @@ Use `torchrun` to spawn one process per GPU. The script auto-detects `LOCAL_RANK
 
 ```bash
 torchrun --standalone --nproc_per_node=4 \
-  python -m src.train --epochs 30 --batch-size 32
+  -m src.train --epochs 30 --batch-size 32
 ```
 
 **Key details:**
@@ -113,11 +113,11 @@ torchrun --standalone --nproc_per_node=4 \
 ```bash
 # 2x4090 example — effective batch 64
 torchrun --standalone --nproc_per_node=2 \
-  python -m src.train --batch-size 32
+  -m src.train --batch-size 32
 
 # Resume (must use same GPU count)
 torchrun --standalone --nproc_per_node=4 \
-  python -m src.train --resume runs/20250101_120000/checkpoints/last.pt
+  -m src.train --resume runs/20250101_120000/checkpoints/last.pt
 ```
 
 ## Evaluate
