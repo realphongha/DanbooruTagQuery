@@ -104,7 +104,7 @@ def run(config):
         # DDP world size must match exactly
         if distributed and ckpt.get("world_size", 1) != world_size:
             raise RuntimeError(
-                f"Checkpoint was saved with world_size={ckpt['world_size']} "
+                f"Checkpoint was saved with world_size={ckpt.get('world_size', 1)} "
                 f"but current world_size={world_size}. Cannot resume with different GPU count."
             )
 
