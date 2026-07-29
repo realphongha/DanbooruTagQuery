@@ -11,7 +11,7 @@ def seed_everything(seed: int) -> None:
 def device() -> torch.device:
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     if torch.cuda.is_available() and local_rank < torch.cuda.device_count():
-        return torch.device(local_rank)
+        return torch.device("cuda", local_rank)
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 

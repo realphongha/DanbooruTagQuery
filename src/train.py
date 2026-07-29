@@ -72,10 +72,10 @@ def run(config):
     tag_to_id = load_json(config.tag_to_id)
     config.num_classes = len(tag_to_id)
 
-    distributed = torch.distributed.is_initialized()
+    distributed = is_distributed()
+    is_main = rank0_only()
     rank = get_rank()
     world_size = get_world_size()
-    is_main = rank == 0
 
     dev = device()
     if dev.type == "cuda":
@@ -146,6 +146,8 @@ def run(config):
             print(f"  Transferred {stats['query_transfer_count']} / {stats['new_tag_count']} tag queries")
 
     if is_main:
+        # EMA lives only on rank 0.  Gradients are synced by DDP so model
+        # weights are identical across ranks — rank 0's EMA is correct for all.
         ema = EMA(model, config.ema_decay)
 
     if dev.type == "cuda":
@@ -165,6 +167,7 @@ def run(config):
             device_ids=[local_rank],
             output_device=local_rank,
             gradient_as_bucket_view=True,
+            static_graph=True,  # fixed computation graph
         )
 
     loss_fn = build_loss()
@@ -195,8 +198,6 @@ def run(config):
     for epoch in range(config.epochs):
         if distributed and hasattr(train.sampler, "set_epoch"):
             train.sampler.set_epoch(epoch)
-            if hasattr(val.sampler, "set_epoch"):
-                val.sampler.set_epoch(epoch)
 
         started = time.time(); model.train(); total = 0.0
         train_iter = tqdm(train, desc=f"Epoch {epoch + 1}/{config.epochs}") if is_main else train
@@ -213,26 +214,44 @@ def run(config):
             raw = model.module if distributed else model
             if is_main:
                 ema.apply(raw)
-            model.eval(); losses = []; predictions = []; targets = []
+            model.eval(); val_loss_sum = 0.0; val_loss_cnt = 0
+            all_preds = []; all_targets = []
             with torch.no_grad():
                 for batch in val:
                     with ctx: logits = model(batch["image"].to(dev)); current = loss_fn(logits, batch["labels"].to(dev))
-                    losses.append(current.item())
+                    bsz = batch["labels"].size(0)
+                    val_loss_sum += current.item() * bsz
+                    val_loss_cnt += bsz
                     if config.compute_multilabel_metrics:
-                        predictions.append(torch.sigmoid(logits).float().cpu()); targets.append(batch["labels"].cpu())
+                        all_preds.append(torch.sigmoid(logits).float().cpu())
+                        all_targets.append(batch["labels"].cpu())
             if is_main:
                 ema.restore(raw)
 
+            # gather loss across GPUs (weighted by batch size, handles uneven last batch)
             if distributed:
-                loss_t = torch.tensor(losses, device=dev)
-                gathered = [torch.zeros_like(loss_t) for _ in range(world_size)]
-                torch.distributed.all_gather(gathered, loss_t)
-                losses = torch.cat(gathered).tolist()
+                loss_data = torch.tensor([val_loss_sum, val_loss_cnt], device=dev)
+                torch.distributed.all_reduce(loss_data)
+                val_loss = loss_data[0].item() / loss_data[1].item()
+            else:
+                val_loss = val_loss_sum / val_loss_cnt
 
-            val_loss = sum(losses) / len(losses)
+            # gather predictions + targets to rank 0 for metric computation
+            if distributed and config.compute_multilabel_metrics:
+                local_preds = torch.cat(all_preds)
+                local_targets = torch.cat(all_targets)
+                gathered_preds = [None] * world_size if is_main else None
+                gathered_targets = [None] * world_size if is_main else None
+                torch.distributed.gather_object(local_preds, gathered_preds if is_main else None, dst=0)
+                torch.distributed.gather_object(local_targets, gathered_targets if is_main else None, dst=0)
+                if is_main:
+                    all_preds = gathered_preds
+                    all_targets = gathered_targets
+                else:
+                    all_preds = []; all_targets = []  # discard on non-main ranks
 
             if config.compute_multilabel_metrics and is_main:
-                metrics = multilabel_metrics(torch.cat(predictions), torch.cat(targets))
+                metrics = multilabel_metrics(torch.cat(all_preds), torch.cat(all_targets))
                 row = {"epoch": epoch + 1, "train_loss": total / len(train), "val_loss": val_loss, **{k: v for k, v in metrics.items() if k != "per_tag_ap"}, "lr": optimizer.param_groups[0]["lr"], "duration": time.time() - started}
                 print_metrics(metrics, tag_to_id, f"Epoch {epoch + 1}/{config.epochs}", extra={"Train loss": total / len(train), "Val loss": val_loss, "LR": optimizer.param_groups[0]["lr"]}, show_per_tag=False)
                 if metrics["map"] > best:
@@ -280,7 +299,7 @@ if __name__ == "__main__":
 
     local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
     if local_rank >= 0:
-        torch.distributed.init_process_group(backend="nccl")
+        torch.distributed.init_process_group(backend="nccl", init_method="env://")
         torch.cuda.set_device(local_rank)
 
     config = TrainConfig()
