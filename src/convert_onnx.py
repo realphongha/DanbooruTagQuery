@@ -13,35 +13,22 @@ import torch
 
 from .config import TrainConfig
 from .model import ImageTagger
-from .onnx_utils import _fix_cast_node_attrs
 
 
 def convert(
     checkpoint: str,
     output: str | None = None,
     opset: int = 18,
-    fp16: bool = False,
-    mixed: bool = False,
-    keep_io_types: bool = True,
-    rtol: float = 0.01,
-    atol: float = 0.001,
     verbose: bool = True,
 ) -> Path:
-    """Export a trained checkpoint to ONNX.
+    """Export a trained checkpoint to FP32 ONNX.
 
     Produces three files alongside *output*:
         <output>.onnx             — the ONNX model (FP32)
         <output>.tag_to_id.json   — tag name → index mapping
         <output>.config.json      — export-time config metadata
 
-    When *fp16* is True the model is additionally converted to full FP16
-    and saved as <output>.fp16.onnx.
-
-    When *mixed* is True the model is converted via
-    auto_mixed_precision (selective FP32 retention) and saved as
-    <output>.mixed.onnx.
-
-    Returns the path to the most-optimised ONNX file produced.
+    Returns the path to the produced ONNX file.
     """
     chk = Path(checkpoint)
     if output is None:
@@ -99,92 +86,6 @@ def convert(
     except TypeError:
         torch.onnx.export(model, dummy, str(onnx_path), **export_kwargs)
 
-    result_path = onnx_path
-
-    # ── FP16 conversion ──
-    if fp16:
-        try:
-            import onnx
-            from onnxconverter_common import float16
-        except ImportError:
-            sys.exit("error: --fp16 requires 'onnx' and 'onnxconverter-common' "
-                      "(pip install onnx onnxconverter-common)")
-
-        # Pass min_positive_val=0 and max_finite_val=np.inf to let FP16
-        # handle underflow/overflow naturally. The library default clamps
-        # tiny values (< 1e-7) up to 1e-7 instead of zeroing them, which
-        # is harmful — replacing "effectively zero" with non-zero degrades
-        # accuracy more than native FP16 underflow.
-        import numpy as np
-        model_onnx = onnx.load(str(onnx_path))
-        model_fp16 = float16.convert_float_to_float16(
-            model_onnx,
-            keep_io_types=keep_io_types,
-            min_positive_val=0.0,
-            max_finite_val=np.inf,
-        )
-        _fix_cast_node_attrs(model_fp16)
-        try:
-            model_fp16 = onnx.shape_inference.infer_shapes(model_fp16)
-        except Exception as e:
-            print(f"warning: shape inference failed after FP16 conversion: {e}")
-        fp16_path = out.with_suffix(".fp16.onnx")
-        onnx.save(model_fp16, str(fp16_path))
-        result_path = fp16_path
-
-        if verbose:
-            print(f"Converted to FP16:  {fp16_path} ({fp16_path.stat().st_size / 1024:.1f} KB)")
-
-    # ── Mixed-precision conversion ──
-    if mixed:
-        try:
-            import onnx
-            from onnxconverter_common import auto_mixed_precision
-        except ImportError:
-            sys.exit("error: --mixed requires 'onnx' and 'onnxconverter-common' "
-                      "(pip install onnx onnxconverter-common)")
-
-        model_onnx = onnx.load(str(onnx_path))
-        # Monkey-patch float16.convert_float_to_float16 so every internal
-        # call inside auto_mixed_precision gets our Cast attr fix applied.
-        # Without this, ORT InferenceSession creation fails with type mismatch
-        # because the library doesn't patch Cast 'to' attributes (bug #320).
-        import onnxconverter_common.float16 as float16_mod
-        original_convert = float16_mod.convert_float_to_float16
-
-        def _patched_convert(model, *args, **kwargs):
-            result = original_convert(model, *args, **kwargs)
-            _fix_cast_node_attrs(result)
-            return result
-
-        float16_mod.convert_float_to_float16 = _patched_convert
-        _fix_cast_node_attrs(model_onnx)
-        feed_dict = {"pixel_values": dummy.numpy()}
-        try:
-            model_mixed = auto_mixed_precision.auto_convert_mixed_precision(
-                model_onnx, feed_dict, rtol=rtol, atol=atol, keep_io_types=keep_io_types,
-            )
-        except Exception as exc:
-            sys.exit(
-                f"error: auto_mixed_precision failed ({exc}).\n"
-                f"  Try --fp16 instead (full FP16 conversion)."
-            )
-        try:
-            model_mixed = onnx.shape_inference.infer_shapes(model_mixed)
-        except Exception as e:
-            print(f"warning: shape inference failed after mixed conversion: {e}")
-        else:
-            _fix_cast_node_attrs(model_mixed)
-        finally:
-            # Restore original convert_float_to_float16
-            float16_mod.convert_float_to_float16 = original_convert
-        mixed_path = out.with_suffix(".mixed.onnx")
-        onnx.save(model_mixed, str(mixed_path))
-        result_path = mixed_path
-
-        if verbose:
-            print(f"Mixed precision:    {mixed_path} ({mixed_path.stat().st_size / 1024:.1f} KB)")
-
     # ── save metadata ──
     tag_map_path = out.with_name(out.stem + ".tag_to_id.json")
     Path(tag_map_path).write_text(json.dumps(tag_to_id, indent=2))
@@ -201,9 +102,6 @@ def convert(
     if verbose:
         print(f"Tag map saved:      {tag_map_path}")
         print(f"Config saved:       {config_path}")
-        extras = [fp16, mixed]
-        if any(extras):
-            print(f"FP32 ONNX:          {onnx_path} ({onnx_path.stat().st_size / 1024:.1f} KB)")
         print(f"Done — {result_path} ({result_path.stat().st_size / 1024:.1f} KB)")
 
     return result_path
@@ -220,28 +118,5 @@ if __name__ == "__main__":
         "--opset", type=int, default=18,
         help="ONNX opset version (default: 18)",
     )
-    parser.add_argument(
-        "--fp16", action="store_true",
-        help="Convert exported ONNX to FP16 via onnxconverter-common",
-    )
-    parser.add_argument(
-        "--no-keep-io-types", action="store_true", default=False,
-        help="Convert input/output tensors to float16 (default: keep as float32)",
-    )
-    parser.add_argument(
-        "--mixed", action="store_true",
-        help="Convert via auto_mixed_precision (selective FP32 retention; requires GPU)",
-    )
-    parser.add_argument(
-        "--rtol", type=float, default=0.01,
-        help="Relative tolerance for mixed-precision validation (default: 0.01)",
-    )
-    parser.add_argument(
-        "--atol", type=float, default=0.001,
-        help="Absolute tolerance for mixed-precision validation (default: 0.001)",
-    )
     args = parser.parse_args()
-    convert(args.checkpoint, args.output, args.opset,
-            fp16=args.fp16, mixed=args.mixed,
-            keep_io_types=not args.no_keep_io_types,
-            rtol=args.rtol, atol=args.atol)
+    convert(args.checkpoint, args.output, args.opset)
