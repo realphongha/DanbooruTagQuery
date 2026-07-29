@@ -20,7 +20,10 @@ def convert(
     output: str | None = None,
     opset: int = 18,
     fp16: bool = False,
+    mixed: bool = False,
     keep_io_types: bool = True,
+    rtol: float = 0.01,
+    atol: float = 0.001,
     verbose: bool = True,
 ) -> Path:
     """Export a trained checkpoint to ONNX.
@@ -30,10 +33,14 @@ def convert(
         <output>.tag_to_id.json   — tag name → index mapping
         <output>.config.json      — export-time config metadata
 
-    When *fp16* is True the model is additionally converted to FP16
+    When *fp16* is True the model is additionally converted to full FP16
     and saved as <output>.fp16.onnx.
 
-    Returns the path to the ONNX file (FP16 path if *fp16* is True).
+    When *mixed* is True the model is converted via
+    auto_mixed_precision (selective FP32 retention) and saved as
+    <output>.mixed.onnx.
+
+    Returns the path to the most-optimised ONNX file produced.
     """
     chk = Path(checkpoint)
     if output is None:
@@ -106,11 +113,33 @@ def convert(
         model_fp16 = float16.convert_float_to_float16(
             model_onnx, keep_io_types=keep_io_types
         )
-        result_path = out.with_suffix(".fp16.onnx")
-        onnx.save(model_fp16, str(result_path))
+        fp16_path = out.with_suffix(".fp16.onnx")
+        onnx.save(model_fp16, str(fp16_path))
+        result_path = fp16_path
 
         if verbose:
-            print(f"Converted to FP16:  {result_path} ({result_path.stat().st_size / 1024:.1f} KB)")
+            print(f"Converted to FP16:  {fp16_path} ({fp16_path.stat().st_size / 1024:.1f} KB)")
+
+    # ── Mixed-precision conversion ──
+    if mixed:
+        try:
+            import onnx
+            from onnxconverter_common import auto_mixed_precision
+        except ImportError:
+            sys.exit("error: --mixed requires 'onnx' and 'onnxconverter-common' "
+                      "(pip install onnx onnxconverter-common)")
+
+        model_onnx = onnx.load(str(onnx_path))
+        feed_dict = {"pixel_values": dummy.numpy()}
+        model_mixed = auto_mixed_precision.auto_convert_mixed_precision(
+            model_onnx, feed_dict, rtol=rtol, atol=atol, keep_io_types=keep_io_types,
+        )
+        mixed_path = out.with_suffix(".mixed.onnx")
+        onnx.save(model_mixed, str(mixed_path))
+        result_path = mixed_path
+
+        if verbose:
+            print(f"Mixed precision:    {mixed_path} ({mixed_path.stat().st_size / 1024:.1f} KB)")
 
     # ── save metadata ──
     tag_map_path = out.with_name(out.stem + ".tag_to_id.json")
@@ -128,7 +157,8 @@ def convert(
     if verbose:
         print(f"Tag map saved:      {tag_map_path}")
         print(f"Config saved:       {config_path}")
-        if fp16:
+        extras = [fp16, mixed]
+        if any(extras):
             print(f"FP32 ONNX:          {onnx_path} ({onnx_path.stat().st_size / 1024:.1f} KB)")
         print(f"Done — {result_path} ({result_path.stat().st_size / 1024:.1f} KB)")
 
@@ -154,5 +184,20 @@ if __name__ == "__main__":
         "--no-keep-io-types", action="store_false", dest="keep_io_types",
         help="Convert input/output tensors to float16 (default: keep as float32)",
     )
+    parser.add_argument(
+        "--mixed", action="store_true",
+        help="Convert via auto_mixed_precision (selective FP32 retention; requires GPU)",
+    )
+    parser.add_argument(
+        "--rtol", type=float, default=0.01,
+        help="Relative tolerance for mixed-precision validation (default: 0.01)",
+    )
+    parser.add_argument(
+        "--atol", type=float, default=0.001,
+        help="Absolute tolerance for mixed-precision validation (default: 0.001)",
+    )
     args = parser.parse_args()
-    convert(args.checkpoint, args.output, args.opset, args.fp16, args.keep_io_types)
+    convert(args.checkpoint, args.output, args.opset,
+            fp16=args.fp16, mixed=args.mixed,
+            keep_io_types=args.keep_io_types,
+            rtol=args.rtol, atol=args.atol)
