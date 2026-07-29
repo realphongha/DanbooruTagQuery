@@ -5,6 +5,7 @@ Shared utilities for ONNX / PyTorch inference across infer.py, evaluate.py, ui.p
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -62,6 +63,54 @@ def load_config(checkpoint: str) -> TrainConfig:
     return cfg
 
 
+# ── ONNX model fixing ──────────────────────────────────────────────────────
+
+
+def _onnx_cast_outputs_to_float32(onnx_path: str) -> str:
+    """Cast any float16 graph outputs to float32 for CPU EP compatibility.
+
+    Returns the path to the fixed model (same path if no fix needed, otherwise
+    a temp file that should be cleaned up by the caller).
+    """
+    import onnx
+    from onnx import helper, TensorProto
+
+    model = onnx.load(str(onnx_path))
+
+    needs_fix = any(
+        o.type.tensor_type.elem_type == TensorProto.FLOAT16
+        for o in model.graph.output
+    )
+    if not needs_fix:
+        return onnx_path
+
+    for output in model.graph.output:
+        if output.type.tensor_type.elem_type != TensorProto.FLOAT16:
+            continue
+
+        orig_name = output.name
+        cast_name = f"{orig_name}_as_fp32"
+
+        cast_node = helper.make_node(
+            "Cast",
+            inputs=[orig_name],
+            outputs=[cast_name],
+            name=f"fix_{orig_name}_to_fp32",
+            to=int(TensorProto.FLOAT),
+        )
+        model.graph.node.append(cast_node)
+
+        # Redirect graph output to the Cast node's output
+        output.name = cast_name
+        output.type.tensor_type.elem_type = TensorProto.FLOAT
+
+    model = onnx.shape_inference.infer_shapes(model)
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".onnx", delete=False)
+    onnx.save(model, tmp.name)
+    return tmp.name
+
+
 # ── Predictor (unified interface for PT + ONNX) ────────────────────────────
 
 class Predictor:
@@ -88,15 +137,19 @@ class Predictor:
                 ("CUDAExecutionProvider", {}),
                 "CPUExecutionProvider",
             ]
+            def _try_load(path, prov):
+                return ort.InferenceSession(path, providers=prov)
+
             try:
-                self._sess = ort.InferenceSession(
-                    self.checkpoint, providers=providers
-                )
+                self._sess = _try_load(self.checkpoint, providers)
             except Exception:
-                # fallback: CPU only
-                self._sess = ort.InferenceSession(
-                    self.checkpoint, providers=["CPUExecutionProvider"]
-                )
+                # fallback: CPU only; fix FP16 outputs if needed
+                fixed = _onnx_cast_outputs_to_float32(self.checkpoint)
+                try:
+                    self._sess = _try_load(fixed, ["CPUExecutionProvider"])
+                finally:
+                    if fixed != self.checkpoint:
+                        Path(fixed).unlink(missing_ok=True)
 
             self._input_name = self._sess.get_inputs()[0].name
             self._output_name = self._sess.get_outputs()[0].name

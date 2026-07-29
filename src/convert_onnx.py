@@ -113,6 +113,7 @@ def convert(
         model_fp16 = float16.convert_float_to_float16(
             model_onnx, keep_io_types=keep_io_types
         )
+        model_fp16 = onnx.shape_inference.infer_shapes(model_fp16)
         fp16_path = out.with_suffix(".fp16.onnx")
         onnx.save(model_fp16, str(fp16_path))
         result_path = fp16_path
@@ -134,6 +135,7 @@ def convert(
         model_mixed = auto_mixed_precision.auto_convert_mixed_precision(
             model_onnx, feed_dict, rtol=rtol, atol=atol, keep_io_types=keep_io_types,
         )
+        model_mixed = onnx.shape_inference.infer_shapes(model_mixed)
         mixed_path = out.with_suffix(".mixed.onnx")
         onnx.save(model_mixed, str(mixed_path))
         result_path = mixed_path
