@@ -376,6 +376,8 @@ if __name__ == "__main__":
 
     if args.resume and args.checkpoint:
         parser.error("--resume and --checkpoint are mutually exclusive")
+    if args.resume and (args.epochs is not None or args.batch_size is not None):
+        parser.error("--resume is mutually exclusive with --epochs and --batch-size (checkpoint config is authoritative)")
 
     local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
     if local_rank >= 0:
