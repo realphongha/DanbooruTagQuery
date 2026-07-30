@@ -5,7 +5,7 @@ Interactive research tool for understanding how the image tagging model represen
 ## Quick Start
 
 ```bash
-uv run python -m src.explorer models/dtq_dinov3b16_448x448_ft_ep9bestmap.pt
+uv run python -m tools.explorer models/dtq_dinov3b16_448x448_ft_ep9bestmap.pt
 ```
 
 Open **http://127.0.0.1:8000** in your browser.
@@ -125,4 +125,4 @@ Uniform or random-looking attention suggests the tag is poorly learned or unrela
 
 | File | Purpose |
 |---|---|
-| `src/explorer.py` | FastAPI app, inference wrapper, inline HTML/JS frontend |
+| `tools/explorer.py` | FastAPI app, inference wrapper, inline HTML/JS frontend |
