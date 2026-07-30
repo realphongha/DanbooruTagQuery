@@ -328,6 +328,11 @@ input[type=text]:focus{outline:none;border-color:#4a90d9}
 .split{display:flex;gap:16px;flex-wrap:wrap}
 .split-main{flex:3;min-width:400px}
 .split-side{flex:1;min-width:240px}
+.brush-controls{display:flex;gap:8px;align-items:center;margin-top:8px;font-size:12px}
+.brush-controls label{color:#888}
+.brush-controls input[type=range]{width:80px;accent-color:#4a90d9}
+.brush-controls .brush-preview{width:24px;height:24px;display:flex;align-items:center;justify-content:center}
+.brush-controls .brush-dot{border-radius:50%;background:#4a90d9}
 </style>
 </head>
 <body>
@@ -358,6 +363,14 @@ input[type=text]:focus{outline:none;border-color:#4a90d9}
         <div id="image-canvas-wrapper">
           <canvas id="image-canvas" width="448" height="448"></canvas>
           <canvas id="patch-overlay" width="448" height="448"></canvas>
+        </div>
+        <div class="brush-controls">
+          <label>Brush:</label>
+          <input type="range" id="brush-size" min="1" max="8" value="1">
+          <span id="brush-size-label">1</span>
+          <div class="brush-preview"><div class="brush-dot" id="brush-dot"></div></div>
+          <button class="btn btn-sm btn-secondary" id="erase-toggle">🧹 Erase: OFF</button>
+          <button class="btn btn-sm btn-danger" id="clear-patches">Clear All</button>
         </div>
         <div class="status" id="infer-status">Load an image to begin.</div>
       </div>
@@ -433,6 +446,7 @@ const S = {
     graphNodes: new vis.DataSet(),
     graphEdges: new vis.DataSet(),
     network: null, physics: true,
+    brushSize: 1, eraseMode: false, painting: false,
 };
 
 // ── canvas setup ───────────────────────────────────────────────────────────
@@ -441,6 +455,34 @@ const ctx = canvas.getContext('2d');
 const overlay = document.getElementById('patch-overlay');
 const octx = overlay.getContext('2d');
 const PS = 16, PPR = 28;
+
+// ── brush preview ──────────────────────────────────────────────────────────
+function updateBrushPreview() {
+    const dot = document.getElementById('brush-dot');
+    const size = Math.max(4, S.brushSize * 3);
+    dot.style.width = size + 'px';
+    dot.style.height = size + 'px';
+}
+
+document.getElementById('brush-size').addEventListener('input', (e) => {
+    S.brushSize = parseInt(e.target.value);
+    document.getElementById('brush-size-label').textContent = S.brushSize;
+    updateBrushPreview();
+});
+
+document.getElementById('erase-toggle').addEventListener('click', () => {
+    S.eraseMode = !S.eraseMode;
+    const btn = document.getElementById('erase-toggle');
+    btn.textContent = S.eraseMode ? '🧹 Erase: ON' : '🧹 Erase: OFF';
+    canvas.style.cursor = S.eraseMode ? 'cell' : 'crosshair';
+});
+
+document.getElementById('clear-patches').addEventListener('click', () => {
+    S.selectedPatches.clear();
+    drawGrid();
+    document.getElementById('patch-count').textContent = '';
+    document.getElementById('tag-list').innerHTML = '<span style="color:#555;font-size:13px">Click patches to explore</span>';
+});
 
 // ── tab switching ──────────────────────────────────────────────────────────
 document.querySelectorAll('.tab').forEach(tab => {
@@ -493,6 +535,65 @@ function drawGrid() {
         octx.strokeRect(x, y, PS, PS);
     }
 }
+
+// ── brush: add/remove a patch and highlight ────────────────────────────────
+function togglePatch(x, y) {
+    const col = Math.floor(x / PS);
+    const row = Math.floor(y / PS);
+    const pid = row * PPR + col;
+    if (pid < 0 || pid >= PPR * PPR) return;
+    if (S.eraseMode) {
+        S.selectedPatches.delete(pid);
+    } else {
+        S.selectedPatches.set(pid, { row, col });
+    }
+}
+
+function brushAt(x, y) {
+    const col = Math.floor(x / PS);
+    const row = Math.floor(y / PS);
+    const r = Math.floor(S.brushSize / 2);
+    for (let dr = -r; dr <= r; dr++) {
+        for (let dc = -r; dc <= r; dc++) {
+            togglePatch((col + dc) * PS, (row + dr) * PS);
+        }
+    }
+}
+
+// ── mouse drag painting ────────────────────────────────────────────────────
+let patchFetchTimer = null;
+canvas.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    S.painting = true;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    brushAt(x, y);
+    drawGrid();
+});
+
+canvas.addEventListener('mousemove', (e) => {
+    if (!S.painting) return;
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+    const x = (e.clientX - rect.left) * scaleX;
+    const y = (e.clientY - rect.top) * scaleY;
+    brushAt(x, y);
+    drawGrid();
+    // Debounced fetch
+    clearTimeout(patchFetchTimer);
+    patchFetchTimer = setTimeout(() => fetchSelectedPatchTags(), 150);
+});
+
+window.addEventListener('mouseup', () => {
+    if (S.painting) {
+        S.painting = false;
+        fetchSelectedPatchTags();
+    }
+});
 
 // ── show heatmap for a tag ─────────────────────────────────────────────────
 async function showTagHeatmap(tag) {
@@ -632,36 +733,7 @@ document.getElementById('image-upload').addEventListener('change', async (e) => 
     }
 });
 
-// ── click on canvas → toggle patch selection ───────────────────────────────
-canvas.addEventListener('click', async (e) => {
-    const rect = canvas.getBoundingClientRect();
-    const scaleX = canvas.width / rect.width;
-    const scaleY = canvas.height / rect.height;
-    const x = (e.clientX - rect.left) * scaleX;
-    const y = (e.clientY - rect.top) * scaleY;
 
-    // Get patch from server
-    const fd = new FormData();
-    fd.append('x', x); fd.append('y', y);
-    fd.append('mode', S.patchMode);
-    try {
-        const r = await fetch('/patch-tags', { method: 'POST', body: fd });
-        const d = await r.json();
-        if (d.error || d.patch == null) return;
-
-        const pid = d.patch;
-        // Toggle selection
-        if (S.selectedPatches.has(pid)) {
-            S.selectedPatches.delete(pid);
-        } else {
-            S.selectedPatches.set(pid, { row: d.row, col: d.col });
-        }
-        drawGrid();
-        await fetchSelectedPatchTags();
-    } catch (err) {
-        showError('infer-status', 'Fetch error: ' + err.message);
-    }
-});
 
 // ── send to graph ──────────────────────────────────────────────────────────
 document.getElementById('send-to-graph-btn').addEventListener('click', () => {
