@@ -5,17 +5,6 @@ import torch
 from torch import nn
 
 
-class LinearHead(nn.Module):
-    def __init__(self, in_features, num_classes):
-        super().__init__()
-        self.linear = nn.Linear(in_features, num_classes)
-
-    def forward(self, tokens):
-        if tokens.ndim == 3:
-            tokens = tokens[:, 0]
-        return self.linear(tokens)
-
-
 class TagQueryHead(nn.Module):
 
     def __init__(self, embed_dim, num_classes, num_heads=8, init_queries=None):
@@ -50,17 +39,12 @@ class TagQueryHead(nn.Module):
 
 
 class ImageTagger(nn.Module):
-    def __init__(self, model_name, num_classes, pretrained=True, head_type="tag_query_head", tag_embeddings=None):
+    def __init__(self, model_name, num_classes, pretrained=True, tag_embeddings=None):
         super().__init__()
         self.backbone = timm.create_model(
             model_name, pretrained=pretrained, num_classes=0
         )
-        if head_type == "linear":
-            self.head = LinearHead(self.backbone.num_features, num_classes)
-        elif head_type == "tag_query_head":
-            self.head = TagQueryHead(self.backbone.num_features, num_classes, init_queries=tag_embeddings)
-        else:
-            raise ValueError(f"Unknown head_type: {head_type}")
+        self.head = TagQueryHead(self.backbone.num_features, num_classes, init_queries=tag_embeddings)
 
     def forward(self, images):
         tokens = self.backbone.forward_features(images)

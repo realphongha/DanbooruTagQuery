@@ -52,7 +52,6 @@ def load_config(checkpoint: str) -> TrainConfig:
             cfg = TrainConfig()
             cfg.image_size = data.get("image_size", cfg.image_size)
             cfg.model_name = data.get("model_name", cfg.model_name)
-            cfg.head_type = data.get("head_type", cfg.head_type)
             cfg.num_classes = data.get("num_classes", 0)
             return cfg
         raise FileNotFoundError(f"Missing config: {sidecar}")
@@ -98,7 +97,6 @@ class Predictor:
                 self.config.model_name,
                 self.config.num_classes,
                 pretrained=False,
-                head_type=self.config.head_type,
             )
             weights = state.get("model_ema") or state.get("model")
             model.load_state_dict(weights)

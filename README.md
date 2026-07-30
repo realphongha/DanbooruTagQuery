@@ -92,6 +92,34 @@ uv run python -m src.train --epochs 1
 
 Training metrics are appended to `runs/metrics.jsonl`.
 
+### Multi-GPU Training (DDP)
+
+Use `torchrun` to spawn one process per GPU. The script auto-detects `LOCAL_RANK` and sets up NCCL-based DistributedDataParallel:
+
+```bash
+torchrun --standalone --nproc_per_node=4 \
+  -m src.train --epochs 30 --batch-size 32
+```
+
+**Key details:**
+
+- `--batch-size` is **per-GPU**. Total effective batch = `batch-size × num-gpus`. Example: 4x4090 with `--batch-size 32` gives 128 total.
+- `torch.compile` switches from `max-autotune` to `default` mode under DDP for faster warmup.
+- EMA lives on rank 0 only — gradients are synced, so weights stay identical across ranks.
+- Validation loss is reduced via `all_reduce`; predictions/targets gathered to rank 0 for metric computation.
+- **Resume requires same GPU count** — checkpoint stores `world_size` and rejects mismatch.
+- Single-GPU fallback: just run `uv run python -m src.train` (no `torchrun`).
+
+```bash
+# 2x4090 example — effective batch 64
+torchrun --standalone --nproc_per_node=2 \
+  -m src.train --batch-size 32
+
+# Resume (must use same GPU count)
+torchrun --standalone --nproc_per_node=4 \
+  -m src.train --resume runs/20250101_120000/checkpoints/last.pt
+```
+
 ## Evaluate
 
 Evaluate a checkpoint on the validation set:

@@ -57,7 +57,6 @@ class OursModel(BaseModel):
             self._config.model_name,
             self._config.num_classes,
             pretrained=False,
-            head_type=self._config.head_type,
         )
         model.load_state_dict(state["model_ema"])
         model.eval()

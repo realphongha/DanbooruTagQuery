@@ -8,7 +8,9 @@ from PIL import Image
 from .config import TrainConfig
 from .model import ImageTagger
 from .transforms import val_transforms
-from .defaults import DEFAULT_TOP_K, DEFAULT_MIN_SCORE, DEFAULT_IGNORE_FILE
+DEFAULT_TOP_K = None
+DEFAULT_MIN_SCORE = 0.2
+DEFAULT_IGNORE_FILE = "data/ignored_tags.txt"
 from .onnx_utils import is_onnx, load_tag_to_id, load_config, Predictor
 
 

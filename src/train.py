@@ -30,12 +30,6 @@ from .utils import (
     load_json,
 )
 
-try:
-    from transformers import SiglipModel, SiglipTokenizer
-except ImportError:
-    SiglipModel = None
-    SiglipTokenizer = None
-
 
 class EMA:
     @staticmethod
@@ -95,18 +89,17 @@ def run(config):
                 )
         # Verify model architecture matches
         saved_cfg = ckpt.get("config", {})
-        for key in ("model_name", "head_type", "num_classes"):
+        for key in ("model_name",):
             if saved_cfg.get(key) != getattr(config, key):
                 raise RuntimeError(
                     f"Checkpoint config mismatch: {key} = {saved_cfg.get(key)} "
                     f"vs current {getattr(config, key)}. Cannot resume."
                 )
-        # DDP world size must match exactly
-        if distributed and ckpt.get("world_size", 1) != world_size:
-            raise RuntimeError(
-                f"Checkpoint was saved with world_size={ckpt['world_size']} "
-                f"but current world_size={world_size}. Cannot resume with different GPU count."
-            )
+        # Warn on world size mismatch — optimizer state may be slightly stale but recovery is safe
+        saved_ws = ckpt.get("world_size", 1)
+        if distributed and saved_ws != world_size:
+            if is_main:
+                print(f"  Warning: checkpoint world_size={saved_ws}, current={world_size}. Optimizer state will recover.")
 
         start_epoch = ckpt.get("epoch", 0)
         best = ckpt.get("best", -float("inf") if config.compute_multilabel_metrics else float("inf"))
@@ -143,35 +136,6 @@ def run(config):
             print(f"  DDP: {world_size} GPUs, rank {rank}")
 
     tag_embeddings = None
-    if config.head_type == "tag_query_head" and config.use_siglip_init:
-        if SiglipModel is None:
-            raise RuntimeError("transformers is required for SigLIP tag query initialization")
-        if is_main:
-            print("Initializing tag query head with SigLIP...")
-            tags_sorted = sorted(tag_to_id, key=tag_to_id.get)
-            texts = [t.replace("_", " ") for t in tags_sorted]
-            siglip = SiglipModel.from_pretrained("google/siglip-base-patch16-224").to(dev).eval()
-            tokenizer = SiglipTokenizer.from_pretrained("google/siglip-base-patch16-224")
-            inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
-            inputs = {k: v.to(dev) for k, v in inputs.items()}
-            with torch.no_grad():
-                text_feats = siglip.text_model(**inputs).pooler_output
-            text_feats = torch.nn.functional.normalize(text_feats, dim=-1)
-            mean = text_feats.mean(dim=0, keepdim=True)
-            centered = text_feats - mean
-            _, _, Vt = torch.linalg.svd(centered, full_matrices=False)
-            n = min(centered.size(0), Vt.size(0), 384)
-            tag_embeddings = centered @ Vt[:n].T
-            if n < 384:
-                tag_embeddings = torch.cat(
-                    [tag_embeddings, torch.zeros(tag_embeddings.size(0), 384 - n)],
-                    dim=1,
-                )
-        if distributed:
-            tag_embeddings = (
-                tag_embeddings if is_main else torch.zeros(len(tag_to_id), 384)
-            )
-            torch.distributed.broadcast(tag_embeddings, src=0)
 
     wandb_run = None
     if is_main and not config.no_wandb:
@@ -196,7 +160,7 @@ def run(config):
     train = make_loader(config.train_parquet, config, train_transforms(config.image_size), True)
     val = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
 
-    model = ImageTagger(config.model_name, config.num_classes, head_type=config.head_type, tag_embeddings=tag_embeddings).to(dev)
+    model = ImageTagger(config.model_name, config.num_classes, tag_embeddings=tag_embeddings).to(dev)
     if args.checkpoint:
         stats = transfer_weights(model, tag_to_id, args.checkpoint, weights_key="model_ema", verbose=is_main)
         if is_main:
@@ -212,7 +176,7 @@ def run(config):
         # weights are identical across ranks — rank 0's EMA is correct for all.
         ema = EMA(model, config.ema_decay)
         if config._resume_ckpt is not None and "model_ema" in config._resume_ckpt:
-            ema.shadow = config._resume_ckpt["model_ema"]
+            ema.shadow = {k: v.to(dev) for k, v in config._resume_ckpt["model_ema"].items()}
 
     if dev.type == "cuda":
         compile_mode = "default" if distributed else "max-autotune"
@@ -390,7 +354,12 @@ if __name__ == "__main__":
         config = TrainConfig()
         for field in TrainConfig.__dataclass_fields__:
             if field in ckpt_cfg:
-                setattr(config, field, ckpt_cfg[field])
+                val = ckpt_cfg[field]
+                # Checkpoint stores Paths as strings; restore to Path
+                ann = TrainConfig.__annotations__.get(field)
+                if ann == Path:
+                    val = Path(val)
+                setattr(config, field, val)
         config.no_wandb = args.no_wandb
         config._resume_ckpt = ckpt
         config._resume_path = args.resume

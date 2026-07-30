@@ -11,7 +11,7 @@ from pathlib import Path
 
 from tqdm import tqdm
 
-from src.api import posts, get_auth_info
+from tools.api import posts, get_auth_info
 
 
 def _format_tags(post: dict) -> str:
