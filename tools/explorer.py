@@ -3,7 +3,7 @@ DTQ Model Explorer V0.1 — FastAPI backend + HTML/JS frontend.
 
 Usage
 -----
-    uv run python -m src.explorer models/dtq_dinov3b16_448x448_ft_ep9bestmap.pt
+    uv run python -m tools.explorer models/dtq_dinov3b16_448x448_ft_ep9bestmap.pt
     # Open http://127.0.0.1:8000
 """
 
@@ -22,8 +22,8 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-from .model import ImageTagger
-from .transforms import val_transforms
+from src.model import ImageTagger
+from src.transforms import val_transforms
 
 # ── constants ───────────────────────────────────────────────────────────────
 
@@ -988,12 +988,13 @@ def create_app(inf: ExplorerInference):
         top_vals = float(patch_attn[sorted_idx[0]])
         min_val = float(patch_attn.min())
         noise_ratio = (top_vals - min_val) / (min_val + 1e-8)
+        ppr = inf.image_size // PATCH_SIZE
 
         return {
             "tag": tag,
             "score": float(inter["scores"][ti]),
             "category": inf.get_tag_category(tag),
-            "top_patches": [{"idx": int(p), "row": int(p) // 28, "col": int(p) % 28} for p in top_p],
+            "top_patches": [{"idx": int(p), "row": int(p) // ppr, "col": int(p) % ppr} for p in top_p],
             "attn_noise_ratio": noise_ratio,
             "heatmap": heatmap_b64,
             "neighbours": neighbours,
