@@ -5,8 +5,8 @@ Fills category for every tag in tag_to_id.json.
 Writes both tag_category.db (SQLite) and tag_category.json.
 
 Usage:
-  python -m src.prebuild_cache                    # uses data/tag_to_id.json
-  python -m src.prebuild_cache --tag-map path/to/tag_to_id.json
+  python -m tools.prebuild_cache                     # uses data/tag_to_id.json
+  python -m tools.prebuild_cache --tag-map path/to/tag_to_id.json
 """
 
 from __future__ import annotations

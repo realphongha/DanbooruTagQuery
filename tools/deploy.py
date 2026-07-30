@@ -148,7 +148,7 @@ def _make_predict_fn(checkpoint: str | Path):
 def _check_cache(checkpoint: str | Path):
     """Auto-run prebuild if cached tags < 10k (only when datasets is available)."""
     try:
-        from src.cache import TagCache
+        from tools.cache import TagCache
 
         tag_map = _sidecar_path(Path(checkpoint), ".tag_to_id.json")
         if not tag_map.exists():
@@ -161,7 +161,7 @@ def _check_cache(checkpoint: str | Path):
 
         # try to prebuild — may fail if datasets/tqdm not installed
         try:
-            from src.prebuild_cache import prebuild
+            from tools.prebuild_cache import prebuild
             print(f"Cache has {n} tags, auto-running prebuild...")
             prebuild(str(tag_map))
             print(f"Cache now has {cache.size()} tags")
@@ -202,7 +202,7 @@ def main():
     elif args.no_ui:
         parser.error("provide an image path with --no-ui")
     else:
-        from src.ui import build_app
+        from tools.ui import build_app
 
         _check_cache(args.checkpoint)
 

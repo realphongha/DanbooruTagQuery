@@ -11,14 +11,16 @@ import gradio as gr
 import numpy as np
 from PIL import Image
 
-from .api import (
+from tools.api import (
     CATEGORY_MAP,
     configure as api_configure,
     get_auth_info,
     wiki_body,
 )
-from .cache import TagCache
-from .defaults import DEFAULT_TOP_K, DEFAULT_MIN_SCORE
+from tools.cache import TagCache
+
+DEFAULT_TOP_K = None
+DEFAULT_MIN_SCORE = 0.2
 
 # ── globals ──────────────────────────────────────────────────────────────────
 
@@ -465,7 +467,7 @@ def launch(predict_fn, share: bool = False, **kwargs):
 
 def launch_from_checkpoint(checkpoint: str, share: bool = False, **kwargs):
     """Convenience: create Predictor (torch-backed) and launch UI."""
-    from .onnx_utils import Predictor
+    from src.onnx_utils import Predictor
 
     predictor = Predictor(checkpoint)
 
