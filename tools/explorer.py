@@ -55,11 +55,9 @@ class ExplorerInference:
         cfg = state.get("config", {})
         self.image_size = cfg.get("image_size", 448)
         self.model_name = cfg.get("model_name", "vit_base_patch16_dinov3.lvd1689m")
-        self.head_type = cfg.get("head_type", "tag_query_head")
-
         self.model = ImageTagger(
             self.model_name, self.num_classes,
-            pretrained=False, head_type=self.head_type,
+            pretrained=False,
         )
         weights = state.get("model_ema") or state.get("model")
         self.model.load_state_dict(weights)
