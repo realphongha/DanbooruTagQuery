@@ -16,7 +16,7 @@ def visualize(checkpoint, output="runs/validation_examples.png", count=12):
     config = TrainConfig()
     config.num_classes = len(load_json(config.tag_to_id))
     state = torch.load(checkpoint, map_location="cpu", weights_only=False)
-    model = ImageTagger(config.model_name, config.num_classes, pretrained=False, head_type=config.head_type)
+    model = ImageTagger(config.model_name, config.num_classes, pretrained=False)
     model.load_state_dict(state["model"])
     model.eval()
     inverse = {v: k for k, v in state["tag_to_id"].items()}

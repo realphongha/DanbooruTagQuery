@@ -58,7 +58,6 @@ def convert(
         config.model_name,
         config.num_classes,
         pretrained=False,
-        head_type=config.head_type,
     )
     model.load_state_dict(weights)
     model.eval()
@@ -93,7 +92,6 @@ def convert(
     config_out = {
         "image_size": config.image_size,
         "model_name": config.model_name,
-        "head_type": config.head_type,
         "num_classes": config.num_classes,
     }
     config_path = out.with_name(out.stem + ".config.json")

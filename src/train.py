@@ -30,12 +30,6 @@ from .utils import (
     load_json,
 )
 
-try:
-    from transformers import SiglipModel, SiglipTokenizer
-except ImportError:
-    SiglipModel = None
-    SiglipTokenizer = None
-
 
 class EMA:
     @staticmethod
@@ -95,7 +89,7 @@ def run(config):
                 )
         # Verify model architecture matches
         saved_cfg = ckpt.get("config", {})
-        for key in ("model_name", "head_type"):
+        for key in ("model_name",)
             if saved_cfg.get(key) != getattr(config, key):
                 raise RuntimeError(
                     f"Checkpoint config mismatch: {key} = {saved_cfg.get(key)} "
@@ -142,35 +136,6 @@ def run(config):
             print(f"  DDP: {world_size} GPUs, rank {rank}")
 
     tag_embeddings = None
-    if config.head_type == "tag_query_head" and config.use_siglip_init:
-        if SiglipModel is None:
-            raise RuntimeError("transformers is required for SigLIP tag query initialization")
-        if is_main:
-            print("Initializing tag query head with SigLIP...")
-            tags_sorted = sorted(tag_to_id, key=tag_to_id.get)
-            texts = [t.replace("_", " ") for t in tags_sorted]
-            siglip = SiglipModel.from_pretrained("google/siglip-base-patch16-224").to(dev).eval()
-            tokenizer = SiglipTokenizer.from_pretrained("google/siglip-base-patch16-224")
-            inputs = tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
-            inputs = {k: v.to(dev) for k, v in inputs.items()}
-            with torch.no_grad():
-                text_feats = siglip.text_model(**inputs).pooler_output
-            text_feats = torch.nn.functional.normalize(text_feats, dim=-1)
-            mean = text_feats.mean(dim=0, keepdim=True)
-            centered = text_feats - mean
-            _, _, Vt = torch.linalg.svd(centered, full_matrices=False)
-            n = min(centered.size(0), Vt.size(0), 384)
-            tag_embeddings = centered @ Vt[:n].T
-            if n < 384:
-                tag_embeddings = torch.cat(
-                    [tag_embeddings, torch.zeros(tag_embeddings.size(0), 384 - n)],
-                    dim=1,
-                )
-        if distributed:
-            tag_embeddings = (
-                tag_embeddings if is_main else torch.zeros(len(tag_to_id), 384)
-            )
-            torch.distributed.broadcast(tag_embeddings, src=0)
 
     wandb_run = None
     if is_main and not config.no_wandb:
@@ -195,7 +160,7 @@ def run(config):
     train = make_loader(config.train_parquet, config, train_transforms(config.image_size), True)
     val = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
 
-    model = ImageTagger(config.model_name, config.num_classes, head_type=config.head_type, tag_embeddings=tag_embeddings).to(dev)
+    model = ImageTagger(config.model_name, config.num_classes, tag_embeddings=tag_embeddings).to(dev)
     if args.checkpoint:
         stats = transfer_weights(model, tag_to_id, args.checkpoint, weights_key="model_ema", verbose=is_main)
         if is_main:
