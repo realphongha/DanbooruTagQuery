@@ -67,6 +67,9 @@ class ExplorerInference:
         self._load_categories()
         self.val_transform = val_transforms(self.image_size)
         self.num_image_patches = (self.image_size // PATCH_SIZE) ** 2
+        # DINOv3 emits [CLS, register..., image patches].  Do not assume the
+        # DINOv2-style single-prefix-token layout here.
+        self.num_prefix_tokens = getattr(self.model.backbone, "num_prefix_tokens", 1)
 
     def _load_categories(self):
         p = Path("models/tag_category.json")
@@ -103,8 +106,10 @@ class ExplorerInference:
         w = attn_mod.in_proj_weight
         b = attn_mod.in_proj_bias
 
-        # Extract patches (skip CLS, registers)
-        patches = patch_tokens[0, 1:1+self.num_image_patches].detach() # (N_p, D)
+        # Extract only spatial image patches; prefix tokens (CLS/registers)
+        # precede them in DINOv3's output sequence.
+        start = self.num_prefix_tokens
+        patches = patch_tokens[0, start:start+self.num_image_patches].detach() # (N_p, D)
         queries = self.model.head.tag_queries.detach()                 # (N_t, D)
 
         # Project K and Q
@@ -193,24 +198,25 @@ def pixel_to_patch(x: float, y: float, image_size: int = 448,
 # ═════════════════════════════════════════════════════════════════════════════
 
 def _aggregate_attn(attn_per_head: torch.Tensor, tag_idx: int, np_: int,
-                    mode: str = "avg") -> np.ndarray:
+                    mode: str = "avg", patch_start: int = 1) -> np.ndarray:
     """Aggregate per-head attention for one tag across all patches.
 
     attn_per_head: (H, C, N_tok)
     mode: "avg" | "max" | int (single head index)
     """
     if isinstance(mode, int):
-        attn = attn_per_head[mode, tag_idx, 1:1 + np_]
+        attn = attn_per_head[mode, tag_idx, patch_start:patch_start + np_]
     elif mode == "max":
-        attn = attn_per_head[:, tag_idx, 1:1 + np_].max(dim=0).values
+        attn = attn_per_head[:, tag_idx, patch_start:patch_start + np_].max(dim=0).values
     else:
-        attn = attn_per_head[:, tag_idx, 1:1 + np_].mean(dim=0)
+        attn = attn_per_head[:, tag_idx, patch_start:patch_start + np_].mean(dim=0)
     return attn.cpu().numpy()
 
 
 def render_heatmap_base64(attn_weights: torch.Tensor, tag_idx: int,
                            image_np: np.ndarray, image_size: int = 448,
-                           patch_size: int = 16, head_mode: str = "avg") -> str:
+                           patch_size: int = 16, head_mode: str = "avg",
+                           patch_start: int = 1) -> str:
     """Return base64 PNG of 3-panel heatmap.
 
     head_mode: "avg" (mean over heads), "max" (max over heads), or int.
@@ -218,7 +224,7 @@ def render_heatmap_base64(attn_weights: torch.Tensor, tag_idx: int,
     np_ = (image_size // patch_size) ** 2
     ppr = image_size // patch_size
 
-    attn = _aggregate_attn(attn_weights, tag_idx, np_, head_mode)
+    attn = _aggregate_attn(attn_weights, tag_idx, np_, head_mode, patch_start)
     attn_2d = attn.reshape(ppr, -1)
 
     # Stats for annotation
@@ -863,7 +869,7 @@ def create_app(inf: ExplorerInference):
         else:
             # Cross-attention weighted by prediction score
             attn = inter["attn_weights"]  # (H, C, N_tok)
-            patch_attn = attn[:, :, pid + 1].mean(dim=0)  # (C,)
+            patch_attn = attn[:, :, inf.num_prefix_tokens + pid].mean(dim=0)  # (C,)
             vals = patch_attn * scores    # (C,)
             mode_label = "attention"
 
@@ -883,7 +889,7 @@ def create_app(inf: ExplorerInference):
                 "val": float(vals[ti]),
             }
             if mode == "attention":
-                row["attention"] = float(attn[:, :, pid + 1].mean(dim=0)[ti])
+                row["attention"] = float(attn[:, :, inf.num_prefix_tokens + pid].mean(dim=0)[ti])
             else:
                 row["similarity"] = float(inter["patch_tag_sim"][pid, ti])
             tags.append(row)
@@ -916,7 +922,7 @@ def create_app(inf: ExplorerInference):
             mode_label = "semantic"
         else:
             attn = inter["attn_weights"]   # (H, C, N_tok)
-            patch_attn = attn[:, :, [pid + 1 for pid in pids]].mean(dim=2).mean(dim=0)  # (C,)
+            patch_attn = attn[:, :, [inf.num_prefix_tokens + pid for pid in pids]].mean(dim=2).mean(dim=0)  # (C,)
             vals = patch_attn * scores
             mode_label = "attention"
 
@@ -936,7 +942,7 @@ def create_app(inf: ExplorerInference):
                 "val": float(vals[ti]),
             }
             if mode == "attention":
-                row["attention"] = float(attn[:, :, [pid + 1 for pid in pids]].mean(dim=2).mean(dim=0)[ti])
+                row["attention"] = float(attn[:, :, [inf.num_prefix_tokens + pid for pid in pids]].mean(dim=2).mean(dim=0)[ti])
             else:
                 row["similarity"] = float(sim[[pid for pid in pids], ti].mean())
             tags.append(row)
@@ -966,7 +972,7 @@ def create_app(inf: ExplorerInference):
         # Heatmap
         heatmap_b64 = render_heatmap_base64(
             inter["attn_weights"], ti, session["image_np"],
-            inf.image_size, PATCH_SIZE, hm,
+            inf.image_size, PATCH_SIZE, hm, inf.num_prefix_tokens,
         )
 
         # Neighbours
@@ -980,7 +986,7 @@ def create_app(inf: ExplorerInference):
         # Top patches (by avg attention across heads)
         np_ = inf.num_image_patches
         attn = inter["attn_weights"]  # (H, C, N_tok) — already on CPU
-        patch_attn = attn[:, ti, 1:1 + np_].mean(dim=0)  # (np_,)
+        patch_attn = attn[:, ti, inf.num_prefix_tokens:inf.num_prefix_tokens + np_].mean(dim=0)  # (np_,)
         sorted_idx = patch_attn.argsort(descending=True)
         top_p = sorted_idx[:5].tolist()
         top_vals = float(patch_attn[sorted_idx[0]])
