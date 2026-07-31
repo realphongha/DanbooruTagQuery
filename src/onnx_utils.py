@@ -60,6 +60,35 @@ def load_config(checkpoint: str) -> TrainConfig:
     raise FileNotFoundError(f"Missing config: {sidecar}")
 
 
+# ── ONNX session helpers ────────────────────────────────────────────────────
+
+
+def _create_onnx_session(onnx_file: Path):
+    """Create ONNX session. Prefer CUDA EP, verify with warmup, fall back to CPU.
+
+    CUDA EP selection can succeed at session creation but fail at run time
+    (e.g. missing libcudnn.so) — the warmup run catches that.
+    """
+    import onnxruntime as ort
+
+    providers = [
+        ("CUDAExecutionProvider", {}),
+        "CPUExecutionProvider",
+    ]
+    try:
+        sess = ort.InferenceSession(str(onnx_file), providers=providers)
+        inp = sess.get_inputs()[0]
+        shape = [1 if d is None or isinstance(d, str) else int(d) for d in inp.shape]
+        dummy = np.zeros(shape, dtype=np.float32)
+        sess.run([sess.get_outputs()[0].name], {inp.name: dummy})
+        return sess
+    except Exception as exc:
+        print(f"  [ONNX] CUDA EP failed ({exc}); using CPU")
+        return ort.InferenceSession(
+            str(onnx_file), providers=["CPUExecutionProvider"]
+        )
+
+
 # ── Predictor (unified interface for PT + ONNX) ────────────────────────────
 
 class Predictor:
@@ -78,23 +107,18 @@ class Predictor:
     >>> scores = p.run(torch.randn(1, 3, 256, 256))   # -> np.ndarray (N, num_classes)
     """
 
-    def __init__(self, checkpoint: str, device: str | None = None):
+    def __init__(self, checkpoint: str, device: str | None = None, chunk_size: int = 4):
         ckpt = Path(checkpoint)
         self.checkpoint = str(ckpt)
         self.tag_to_id = load_tag_to_id(self.checkpoint)
         self.config = load_config(self.checkpoint)
         self.val_transform: Compose = val_transforms(self.config.image_size)
         self._is_onnx = is_onnx(self.checkpoint)
+        self._chunk_size = chunk_size
 
         if self._is_onnx:
-            import onnxruntime as ort
-
             onnx_file = _resolve_model_dir(ckpt) / "model.onnx"
-            providers = [
-                ("CUDAExecutionProvider", {}),
-                "CPUExecutionProvider",
-            ]
-            self._sess = ort.InferenceSession(str(onnx_file), providers=providers)
+            self._sess = _create_onnx_session(onnx_file)
             self._input_name = self._sess.get_inputs()[0].name
             self._output_name = self._sess.get_outputs()[0].name
             self._model = None
@@ -120,10 +144,20 @@ class Predictor:
                 np_input = pixel_values.cpu().numpy()
             else:
                 np_input = pixel_values
-            raw = self._sess.run(
-                [self._output_name],
-                {self._input_name: np_input},
-            )[0]
+            if len(np_input) > self._chunk_size:
+                chunks = [
+                    self._sess.run(
+                        [self._output_name],
+                        {self._input_name: np_input[i : i + self._chunk_size]},
+                    )[0]
+                    for i in range(0, len(np_input), self._chunk_size)
+                ]
+                raw = np.concatenate(chunks, axis=0)
+            else:
+                raw = self._sess.run(
+                    [self._output_name],
+                    {self._input_name: np_input},
+                )[0]
             return 1.0 / (1.0 + np.exp(-raw))  # sigmoid
 
         if isinstance(pixel_values, np.ndarray):

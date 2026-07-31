@@ -9,12 +9,47 @@ No PyTorch or torchvision needed.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import sys
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
+
+# ── cuDNN preload ───────────────────────────────────────────────────────────
+
+
+def _preload_cudnn() -> bool:
+    """Load libcudnn.so before creating an ONNX session.
+
+    ONNX Runtime's CUDA EP dlopens libcudnn at run time. In environments where
+    cuDNN comes from pip's `nvidia-cudnn` wheel (no system install), the loader
+    path is never set unless something imports torch first. Preload it so
+    deploy.py can stay torch-free.
+    """
+    candidates: list[str] = []
+
+    # 1) pip nvidia-cudnn wheel
+    try:
+        from nvidia.cudnn import lib as cudnn_lib
+        for d in cudnn_lib.__path__:
+            candidates.append(str(Path(d) / "libcudnn.so.9"))
+    except Exception:
+        pass
+
+    # 2) ctypes default search (system install / LD_LIBRARY_PATH)
+    for name in ("libcudnn.so.9", "libcudnn.so.8", "libcudnn.so"):
+        candidates.append(name)
+
+    for cand in candidates:
+        try:
+            ctypes.CDLL(cand)
+            return True
+        except Exception:
+            continue
+    return False
+
 
 # ── constants ───────────────────────────────────────────────────────────────
 
@@ -112,6 +147,8 @@ class Predictor:
     def __init__(self, checkpoint: str | Path):
         import onnxruntime as ort
 
+        _preload_cudnn()
+
         self.checkpoint = str(checkpoint)
         self.tag_to_id = load_tag_to_id(self.checkpoint)
         self.cat_map = load_category_map(self.checkpoint)
@@ -125,7 +162,13 @@ class Predictor:
         ]
         try:
             self._sess = ort.InferenceSession(str(onnx_file), providers=providers)
-        except Exception:
+            # warmup — CUDA EP can fail at run time (e.g. missing libcudnn.so)
+            inp = self._sess.get_inputs()[0]
+            shape = [1 if d is None or isinstance(d, str) else int(d) for d in inp.shape]
+            dummy = np.zeros(shape, dtype=np.float32)
+            self._sess.run([self._sess.get_outputs()[0].name], {inp.name: dummy})
+        except Exception as exc:
+            print(f"  [ONNX] CUDA EP failed ({exc}); using CPU")
             self._sess = ort.InferenceSession(
                 str(onnx_file), providers=["CPUExecutionProvider"]
             )
