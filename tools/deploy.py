@@ -24,26 +24,33 @@ IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 # ── sidecar loading ─────────────────────────────────────────────────────────
 
 
-def _sidecar_path(checkpoint: Path, suffix: str) -> Path:
-    if checkpoint.suffix == ".onnx":
-        return checkpoint.with_name(checkpoint.stem + suffix)
-    return checkpoint / suffix.lstrip(".")
+def _resolve_model_dir(checkpoint: str | Path) -> Path:
+    """Resolve model directory from path.
+
+    Accepts:
+        - path/to/model_dir          (directory)
+        - path/to/model_dir/model.onnx  (model.onnx file → parent dir)
+    """
+    ckpt = Path(checkpoint)
+    if ckpt.name == "model.onnx":
+        return ckpt.parent
+    return ckpt
 
 
 def load_tag_to_id(checkpoint: str | Path) -> dict[str, int]:
-    ckpt = Path(checkpoint)
-    path = _sidecar_path(ckpt, ".tag_to_id.json")
-    if not path.exists():
-        raise FileNotFoundError(f"Missing tag map: {path}")
-    return json.loads(path.read_text())
+    model_dir = _resolve_model_dir(checkpoint)
+    sidecar = model_dir / "tag_to_id.json"
+    if not sidecar.exists():
+        raise FileNotFoundError(f"Missing tag map: {sidecar}")
+    return json.loads(sidecar.read_text())
 
 
 def load_config(checkpoint: str | Path) -> dict:
-    ckpt = Path(checkpoint)
-    path = _sidecar_path(ckpt, ".config.json")
-    if not path.exists():
+    model_dir = _resolve_model_dir(checkpoint)
+    sidecar = model_dir / "config.json"
+    if not sidecar.exists():
         return {"image_size": 448}
-    return json.loads(path.read_text())
+    return json.loads(sidecar.read_text())
 
 
 # ── image preprocessing (PIL + numpy, no torch) ─────────────────────────────
@@ -83,15 +90,16 @@ class Predictor:
         cfg = load_config(self.checkpoint)
         self.image_size = cfg.get("image_size", 448)
 
+        onnx_file = _resolve_model_dir(checkpoint) / "model.onnx"
         providers = [
             ("CUDAExecutionProvider", {}),
             "CPUExecutionProvider",
         ]
         try:
-            self._sess = ort.InferenceSession(self.checkpoint, providers=providers)
+            self._sess = ort.InferenceSession(str(onnx_file), providers=providers)
         except Exception:
             self._sess = ort.InferenceSession(
-                self.checkpoint, providers=["CPUExecutionProvider"]
+                str(onnx_file), providers=["CPUExecutionProvider"]
             )
 
         self._input_name = self._sess.get_inputs()[0].name
@@ -150,7 +158,8 @@ def _check_cache(checkpoint: str | Path):
     try:
         from tools.cache import TagCache
 
-        tag_map = _sidecar_path(Path(checkpoint), ".tag_to_id.json")
+        model_dir = _resolve_model_dir(checkpoint)
+        tag_map = model_dir / "tag_to_id.json"
         if not tag_map.exists():
             return
 
@@ -182,7 +191,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="DanbooruTagQuery - ONNX deploy",
     )
-    parser.add_argument("checkpoint", help="Path to .onnx model")
+    parser.add_argument("checkpoint", help="Path to model directory or model.onnx file")
     parser.add_argument(
         "image", nargs="?", default=None,
         help="Image path (run CLI inference; omit to launch web UI)",

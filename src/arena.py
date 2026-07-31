@@ -21,6 +21,7 @@ from tqdm import tqdm
 from .config import TrainConfig
 from .metrics import multilabel_metrics, print_metrics
 from .model import ImageTagger
+from .onnx_utils import Predictor
 from .transforms import val_transforms
 from .utils import load_json
 
@@ -28,13 +29,23 @@ from .compared_models import BaseModel, list_available_models
 
 
 class OursModel(BaseModel):
-    """Wrapper for our ImageTagger model."""
+    """Wrapper for our ImageTagger model. Supports PT checkpoints and ONNX."""
 
     def __init__(self, checkpoint: Path):
         self._checkpoint = checkpoint
         self._tags: list[str] = []
         self._model = None
+        self._predictor: Predictor | None = None
         self._config = TrainConfig()
+        self._is_onnx = self._check_onnx(checkpoint)
+
+    @staticmethod
+    def _check_onnx(ckpt: Path) -> bool:
+        if ckpt.suffix == ".onnx" and ckpt.name == "model.onnx":
+            return (ckpt.parent / "model.onnx").exists()
+        if ckpt.is_dir():
+            return (ckpt / "model.onnx").exists()
+        return False
 
     @property
     def name(self) -> str:
@@ -50,20 +61,29 @@ class OursModel(BaseModel):
         return (s, s)
 
     def load(self) -> None:
-        state = torch.load(self._checkpoint, map_location="cpu", weights_only=False)
-        self._tags = list(state["tag_to_id"].keys())
-        self._config.num_classes = len(self._tags)
-        model = ImageTagger(
-            self._config.model_name,
-            self._config.num_classes,
-            pretrained=False,
-        )
-        model.load_state_dict(state["model_ema"])
-        model.eval()
-        self._model = model
+        if self._is_onnx:
+            self._predictor = Predictor(str(self._checkpoint), device=str(self.device))
+            self._tags = list(self._predictor.tag_to_id.keys())
+            self._config = self._predictor.config
+        else:
+            state = torch.load(self._checkpoint, map_location="cpu", weights_only=False)
+            self._tags = list(state["tag_to_id"].keys())
+            self._config.num_classes = len(self._tags)
+            model = ImageTagger(
+                self._config.model_name,
+                self._config.num_classes,
+                pretrained=False,
+            )
+            model.load_state_dict(state["model_ema"])
+            model.eval()
+            self._model = model
         print(f"    {len(self._tags)} tags")
 
     def predict(self, image: Image.Image) -> np.ndarray:
+        if self._predictor is not None:
+            tensor = self._predictor.val_transform(image.convert("RGB")).unsqueeze(0)
+            return self._predictor.run(tensor)[0].astype(np.float32)
+
         tensor = val_transforms(self._config.image_size)(image.convert("RGB")).unsqueeze(0)
         dev = self.device
         if next(self._model.parameters()).device != dev:
@@ -127,6 +147,7 @@ def _free_model(model) -> None:
     """Unload model from GPU and free memory."""
     if model is not None:
         model._model = None
+        model._predictor = None
         if model.device.type == "cuda":
             torch.cuda.empty_cache()
 

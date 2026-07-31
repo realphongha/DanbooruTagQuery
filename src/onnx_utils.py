@@ -18,62 +18,69 @@ from .transforms import val_transforms
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
+def _resolve_model_dir(ckpt: Path) -> Path:
+    """Resolve model directory from path.
+
+    Accepts:
+        - path/to/model_dir          (directory)
+        - path/to/model_dir/model.onnx  (model.onnx file → parent dir)
+    """
+    if ckpt.name == "model.onnx":
+        return ckpt.parent
+    return ckpt
+
+
 def is_onnx(path: str | Path) -> bool:
-    return Path(path).suffix == ".onnx"
-
-
-def _sidecar_stem(ckpt: Path) -> str:
-    """Strip variant suffixes (.fp16, .mixed) from ONNX filename stem."""
-    stem = ckpt.with_suffix("").stem  # removes .onnx
-    for variant in (".fp16", ".mixed"):
-        if stem.endswith(variant):
-            stem = stem[: -len(variant)]
-            break
-    return stem
+    p = Path(path)
+    if p.name == "model.onnx" or p.suffix == ".onnx":
+        return True
+    if p.is_dir():
+        return (p / "model.onnx").exists()
+    return False
 
 
 def load_tag_to_id(checkpoint: str) -> dict[str, int]:
-    ckpt = Path(checkpoint)
-    if ckpt.suffix == ".onnx":
-        sidecar = ckpt.with_name(_sidecar_stem(ckpt) + ".tag_to_id.json")
-        if sidecar.exists():
-            return json.loads(sidecar.read_text())
-        raise FileNotFoundError(f"Missing tag map: {sidecar}")
-    state = torch.load(str(ckpt), map_location="cpu", weights_only=False)
-    return state["tag_to_id"]
+    model_dir = _resolve_model_dir(Path(checkpoint))
+    sidecar = model_dir / "tag_to_id.json"
+    if sidecar.exists():
+        return json.loads(sidecar.read_text())
+    raise FileNotFoundError(f"Missing tag map: {sidecar}")
 
 
 def load_config(checkpoint: str) -> TrainConfig:
-    ckpt = Path(checkpoint)
-    if ckpt.suffix == ".onnx":
-        sidecar = ckpt.with_name(_sidecar_stem(ckpt) + ".config.json")
-        if sidecar.exists():
-            data = json.loads(sidecar.read_text())
-            cfg = TrainConfig()
-            cfg.image_size = data.get("image_size", cfg.image_size)
-            cfg.model_name = data.get("model_name", cfg.model_name)
-            cfg.num_classes = data.get("num_classes", 0)
-            return cfg
-        raise FileNotFoundError(f"Missing config: {sidecar}")
-    cfg = TrainConfig()
-    state = torch.load(str(ckpt), map_location="cpu", weights_only=False)
-    cfg.num_classes = len(state["tag_to_id"])
-    return cfg
+    model_dir = _resolve_model_dir(Path(checkpoint))
+    sidecar = model_dir / "config.json"
+    if sidecar.exists():
+        data = json.loads(sidecar.read_text())
+        cfg = TrainConfig()
+        cfg.image_size = data.get("image_size", cfg.image_size)
+        cfg.model_name = data.get("model_name", cfg.model_name)
+        cfg.num_classes = data.get("num_classes", 0)
+        return cfg
+    raise FileNotFoundError(f"Missing config: {sidecar}")
 
 
 # ── Predictor (unified interface for PT + ONNX) ────────────────────────────
 
 class Predictor:
-    """Loads a checkpoint (.pt or .onnx) and runs batched inference.
+    """Loads a checkpoint (.pt or model directory) and runs batched inference.
+
+    Directory format:
+        model_dir/
+            model.onnx
+            tag_to_id.json
+            config.json
 
     Usage
     -----
-    >>> p = Predictor("model.onnx")
+    >>> p = Predictor("my_model")               # directory
+    >>> p = Predictor("my_model/model.onnx")     # model.onnx → resolves to dir
     >>> scores = p.run(torch.randn(1, 3, 256, 256))   # -> np.ndarray (N, num_classes)
     """
 
     def __init__(self, checkpoint: str, device: str | None = None):
-        self.checkpoint = str(checkpoint)
+        ckpt = Path(checkpoint)
+        self.checkpoint = str(ckpt)
         self.tag_to_id = load_tag_to_id(self.checkpoint)
         self.config = load_config(self.checkpoint)
         self.val_transform: Compose = val_transforms(self.config.image_size)
@@ -82,11 +89,12 @@ class Predictor:
         if self._is_onnx:
             import onnxruntime as ort
 
+            onnx_file = _resolve_model_dir(ckpt) / "model.onnx"
             providers = [
                 ("CUDAExecutionProvider", {}),
                 "CPUExecutionProvider",
             ]
-            self._sess = ort.InferenceSession(self.checkpoint, providers=providers)
+            self._sess = ort.InferenceSession(str(onnx_file), providers=providers)
             self._input_name = self._sess.get_inputs()[0].name
             self._output_name = self._sess.get_outputs()[0].name
             self._model = None

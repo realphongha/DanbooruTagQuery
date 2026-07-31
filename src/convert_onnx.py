@@ -23,18 +23,19 @@ def convert(
 ) -> Path:
     """Export a trained checkpoint to FP32 ONNX.
 
-    Produces three files alongside *output*:
-        <output>.onnx             — the ONNX model (FP32)
-        <output>.tag_to_id.json   — tag name → index mapping
-        <output>.config.json      — export-time config metadata
+    Produces a model directory with three files:
+        <output>/
+            model.onnx            — the ONNX model (FP32)
+            tag_to_id.json        — tag name → index mapping
+            config.json           — export-time config metadata
 
     Returns the path to the produced ONNX file.
     """
     chk = Path(checkpoint)
     if output is None:
         output = str(chk.with_suffix(""))
-    out = Path(output)
-    out.parent.mkdir(parents=True, exist_ok=True)
+    model_dir = Path(output)
+    model_dir.mkdir(parents=True, exist_ok=True)
 
     # ── load checkpoint ──
     if verbose:
@@ -64,7 +65,7 @@ def convert(
 
     # ── export FP32 ONNX ──
     dummy = torch.randn(1, 3, config.image_size, config.image_size)
-    onnx_path = out.with_suffix(".onnx")
+    onnx_path = model_dir / "model.onnx"
 
     if verbose:
         print(f"Exporting to ONNX (opset {opset}): {onnx_path}")
@@ -86,16 +87,16 @@ def convert(
         torch.onnx.export(model, dummy, str(onnx_path), **export_kwargs)
 
     # ── save metadata ──
-    tag_map_path = out.with_name(out.stem + ".tag_to_id.json")
-    Path(tag_map_path).write_text(json.dumps(tag_to_id, indent=2))
+    tag_map_path = model_dir / "tag_to_id.json"
+    tag_map_path.write_text(json.dumps(tag_to_id, indent=2))
 
     config_out = {
         "image_size": config.image_size,
         "model_name": config.model_name,
         "num_classes": config.num_classes,
     }
-    config_path = out.with_name(out.stem + ".config.json")
-    Path(config_path).write_text(json.dumps(config_out, indent=2))
+    config_path = model_dir / "config.json"
+    config_path.write_text(json.dumps(config_out, indent=2))
 
     if verbose:
         print(f"Tag map saved:      {tag_map_path}")
