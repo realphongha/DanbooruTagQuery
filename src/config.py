@@ -26,7 +26,7 @@ class TrainConfig:
     ema_decay: float = 0.999
     num_classes: int = 0
     val_interval: int = 1
-    compute_multilabel_metrics: bool = False
+    compute_multilabel_metrics: bool = True
 
     def to_dict(self):
         return {key: str(value) if isinstance(value, Path) else value for key, value in asdict(self).items()}
