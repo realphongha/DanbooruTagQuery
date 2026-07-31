@@ -2,7 +2,7 @@
 Pre-populate tag category lookup from HF dataset + Danbooru API.
 
 Fills category for every tag in tag_to_id.json.
-Writes both tag_category.db (SQLite) and tag_category.json.
+Writes tag_category.json.
 
 Usage:
   python -m tools.prebuild_cache                     # uses data/tag_to_id.json
@@ -20,7 +20,6 @@ from datasets import load_dataset
 from tqdm import tqdm
 
 from .api import tag_info
-from .cache import TagCache
 
 HF_DATASET = "qdlabs/danbooru-tags"
 API_WORKERS = 2
@@ -63,24 +62,12 @@ def _parallel_api_lookup(tags: list[str]) -> dict[str, int]:
     return results
 
 
-def _load_existing(out_dir: Path, tags: list[str]) -> dict[str, int]:
-    """Load already-known categories from existing JSON & SQLite files."""
-    existing: dict[str, int] = {}
-
+def _load_existing(out_dir: Path) -> dict[str, int]:
+    """Load already-known categories from existing JSON file."""
     json_path = out_dir / "tag_category.json"
     if json_path.exists():
-        existing.update(json.loads(json_path.read_text()))
-
-    db_path = out_dir / "tag_category.db"
-    if db_path.exists():
-        cache = TagCache(str(db_path))
-        for tag in tags:
-            if tag not in existing:
-                cached = cache.get(tag)
-                if cached and cached[0] is not None:
-                    existing[tag] = cached[0]
-
-    return existing
+        return json.loads(json_path.read_text())
+    return {}
 
 
 def prebuild(tag_to_id_path: str | Path = "data/tag_to_id.json"):
@@ -90,7 +77,7 @@ def prebuild(tag_to_id_path: str | Path = "data/tag_to_id.json"):
     out_dir = tag_to_id_path.parent
 
     # load existing (from previous runs)
-    existing = _load_existing(out_dir, tags)
+    existing = _load_existing(out_dir)
 
     # tags still needing a category
     missing = [t for t in tags if t not in existing]
@@ -131,11 +118,6 @@ def prebuild(tag_to_id_path: str | Path = "data/tag_to_id.json"):
     json_path = out_dir / "tag_category.json"
     json_path.write_text(json.dumps(merge, indent=0) + "\n")
     print(f"Written {json_path} ({len(merge)} tags)")
-
-    # ── write SQLite ────────────────────────────────────────────────────
-    cache = TagCache(str(out_dir / "tag_category.db"))
-    cache.bulk_set([(tag, merge[tag], None) for tag in tags])
-    print(f"Written {out_dir / 'tag_category.db'} ({cache.size()} entries)")
 
 
 if __name__ == "__main__":

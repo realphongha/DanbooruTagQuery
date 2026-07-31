@@ -21,6 +21,22 @@ from PIL import Image
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
+# ── category map ────────────────────────────────────────────────────────────
+
+CATEGORY_MAP = {
+    0: "general",
+    1: "artist",
+    3: "copyright",
+    4: "character",
+    5: "meta",
+}
+
+
+def get_category_name(cat_map: dict[str, int], tag: str) -> str:
+    cat_id = cat_map.get(tag, 0)
+    return CATEGORY_MAP.get(cat_id, "general")
+
+
 # ── sidecar loading ─────────────────────────────────────────────────────────
 
 
@@ -50,6 +66,17 @@ def load_config(checkpoint: str | Path) -> dict:
     sidecar = model_dir / "config.json"
     if not sidecar.exists():
         return {"image_size": 448}
+    return json.loads(sidecar.read_text())
+
+
+def load_category_map(checkpoint: str | Path) -> dict[str, int]:
+    model_dir = _resolve_model_dir(checkpoint)
+    sidecar = model_dir / "tag_category.json"
+    if not sidecar.exists():
+        raise FileNotFoundError(
+            f"Missing tag_category.json: {sidecar}\n"
+            f"Run: python -m tools.prebuild_cache --tag-map {model_dir}/tag_to_id.json"
+        )
     return json.loads(sidecar.read_text())
 
 
@@ -87,6 +114,7 @@ class Predictor:
 
         self.checkpoint = str(checkpoint)
         self.tag_to_id = load_tag_to_id(self.checkpoint)
+        self.cat_map = load_category_map(self.checkpoint)
         cfg = load_config(self.checkpoint)
         self.image_size = cfg.get("image_size", 448)
 
@@ -113,6 +141,9 @@ class Predictor:
     @property
     def num_classes(self) -> int:
         return len(self.tag_to_id)
+
+    def category_name(self, tag: str) -> str:
+        return get_category_name(self.cat_map, tag)
 
 
 def predict(
@@ -150,38 +181,7 @@ def _make_predict_fn(checkpoint: str | Path):
         indices = np.argsort(logits)[::-1]
         return [(inv[int(i)], float(logits[i])) for i in indices]
 
-    return predict_fn
-
-
-def _check_cache(checkpoint: str | Path):
-    """Auto-run prebuild if cached tags < 10k (only when datasets is available)."""
-    try:
-        from tools.cache import TagCache
-
-        model_dir = _resolve_model_dir(checkpoint)
-        tag_map = model_dir / "tag_to_id.json"
-        if not tag_map.exists():
-            return
-
-        cache = TagCache()
-        n = cache.size()
-        if n >= 10_000:
-            return
-
-        # try to prebuild — may fail if datasets/tqdm not installed
-        try:
-            from tools.prebuild_cache import prebuild
-            print(f"Cache has {n} tags, auto-running prebuild...")
-            prebuild(str(tag_map))
-            print(f"Cache now has {cache.size()} tags")
-        except ImportError:
-            print(
-                f"📦 Tag cache only has {n} tags.\n"
-                f"   For full metadata (categories, wiki), run from your dev venv:\n"
-                f"   python -m src.prebuild_cache\n"
-            )
-    except Exception:
-        pass
+    return predict_fn, predictor
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -205,18 +205,27 @@ def main():
     args = parser.parse_args()
 
     if args.image:
-        results = predict(args.image, args.checkpoint, args.top_k, args.min_score)
+        predictor = Predictor(args.checkpoint)
+        image = Image.open(args.image).convert("RGB")
+        tensor = preprocess(image, predictor.image_size)
+        scores = predictor.run(tensor)[0]
+        inv = {v: k for k, v in predictor.tag_to_id.items()}
+        indices = np.argsort(scores)[::-1]
+        results = [(inv[int(i)], float(scores[i])) for i in indices]
+        if args.min_score > 0.0:
+            results = [(t, s) for t, s in results if s >= args.min_score]
+        if args.top_k is not None and args.top_k > 0:
+            results = results[:args.top_k]
         for tag, score in results:
-            print(f"{tag.replace('_', ' '):<28} {score:.4f}")
+            cat = predictor.category_name(tag)
+            print(f"{tag.replace('_', ' '):<28} {score:.4f}  [{cat}]")
     elif args.no_ui:
         parser.error("provide an image path with --no-ui")
     else:
         from tools.ui import build_app
 
-        _check_cache(args.checkpoint)
-
-        predict_fn = _make_predict_fn(args.checkpoint)
-        app = build_app(predict_fn)
+        predict_fn, predictor = _make_predict_fn(args.checkpoint)
+        app = build_app(predict_fn, predictor.cat_map)
         app.launch(
             share=args.share,
             server_name=args.host,
