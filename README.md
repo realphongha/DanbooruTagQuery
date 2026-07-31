@@ -193,6 +193,19 @@ uv run python -m src.visualize \
   --output runs/validation_examples.png
 ```
 
+## Model Explorer
+
+Interactive research tool for understanding how the model represents visual concepts and makes predictions.
+
+- **Patch ↔ Tag Inspector** — click image patches to see which tags fire, click tags to see which image regions they attend to
+- **Infinite Semantic Graph** — explore learned tag relationships through an expandable nearest-neighbour graph
+
+```bash
+uv run python -m tools.explorer models/dtq_dinov3b16_448x448_ft_ep9bestmap.pt
+```
+
+Open **http://127.0.0.1:8000** in your browser. Requires a PyTorch checkpoint (`.pt`). Full documentation in [`EXPLORER.md`](EXPLORER.md).
+
 ## Project Structure
 
 ```text
@@ -210,4 +223,6 @@ src/
 ├── transforms.py
 ├── utils.py
 └── visualize.py
+tools/
+├── explorer.py        # Model Explorer (FastAPI + HTML/JS)
 ```
