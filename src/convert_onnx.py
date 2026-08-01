@@ -54,17 +54,33 @@ def convert(
     config = TrainConfig()
     config.num_classes = len(tag_to_id)
 
+    # Build from the checkpoint's own saved config so non-default architectures
+    # (e.g. B/16 students, projector models) export correctly instead of using
+    # TrainConfig() defaults.  Falls back to defaults for legacy checkpoints.
+    ckpt_cfg = state.get("config", {})
+    model_name = ckpt_cfg.get("model_name", config.model_name)
+    image_size = ckpt_cfg.get("image_size", config.image_size)
+    projector = ckpt_cfg.get("projector") or ""
+    head_embed = None
+    if projector:
+        parts = str(projector).split(":")
+        if len(parts) == 2:
+            head_embed = int(parts[1])
+        else:
+            sys.exit(f"error: invalid projector field in checkpoint config: {projector!r}")
+
     # ── build model & load weights ──
     model = ImageTagger(
-        config.model_name,
+        model_name,
         config.num_classes,
         pretrained=False,
+        head_embed_dim=head_embed,
     )
     model.load_state_dict(weights)
     model.eval()
 
     # ── export FP32 ONNX ──
-    dummy = torch.randn(1, 3, config.image_size, config.image_size)
+    dummy = torch.randn(1, 3, image_size, image_size)
     onnx_path = model_dir / "model.onnx"
 
     if verbose:
@@ -91,9 +107,10 @@ def convert(
     tag_map_path.write_text(json.dumps(tag_to_id, indent=2))
 
     config_out = {
-        "image_size": config.image_size,
-        "model_name": config.model_name,
+        "image_size": image_size,
+        "model_name": model_name,
         "num_classes": config.num_classes,
+        "projector": projector,
     }
     config_path = model_dir / "config.json"
     config_path.write_text(json.dumps(config_out, indent=2))

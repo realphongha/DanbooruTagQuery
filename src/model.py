@@ -38,20 +38,48 @@ class TagQueryHead(nn.Module):
         return logits.squeeze(-1)
 
 
+class Projector(nn.Module):
+    """Linear projection from student backbone dim into teacher head dim.
+
+    Used for transfer learning when the student backbone's embed dim differs
+    from the teacher checkpoint's head embed dim, so the trained head (built at
+    the teacher's dim) can be reused 1:1.
+    """
+
+    def __init__(self, in_dim: int, out_dim: int):
+        super().__init__()
+        self.proj = nn.Linear(in_dim, out_dim)
+
+    def forward(self, tokens):
+        return self.proj(tokens)
+
+
 class ImageTagger(nn.Module):
-    def __init__(self, model_name, num_classes, pretrained=True, tag_embeddings=None):
+    def __init__(self, model_name, num_classes, pretrained=True, tag_embeddings=None, head_embed_dim=None):
         super().__init__()
         self.backbone = timm.create_model(
             model_name, pretrained=pretrained, num_classes=0
         )
-        self.head = TagQueryHead(self.backbone.num_features, num_classes, init_queries=tag_embeddings)
+        backbone_dim = self.backbone.num_features
+        if head_embed_dim is None:
+            head_embed_dim = backbone_dim
+        if head_embed_dim != backbone_dim:
+            self.projector = Projector(backbone_dim, head_embed_dim)
+        else:
+            self.projector = None
+        self.head = TagQueryHead(head_embed_dim, num_classes, init_queries=tag_embeddings)
 
     def forward(self, images):
         tokens = self.backbone.forward_features(images)
+        if self.projector is not None:
+            tokens = self.projector(tokens)
         return self.head(tokens)
 
     def extract_features(self, images):
-        return self.backbone.forward_features(images)
+        tokens = self.backbone.forward_features(images)
+        if self.projector is not None:
+            tokens = self.projector(tokens)
+        return tokens
 
 
 def _transfer_module(module, old_state, prefix, verbose=True):
@@ -81,8 +109,10 @@ def transfer_weights(
     checkpoint_path: str | Path,
     weights_key: str = "model_ema",
     verbose: bool = True,
+    state: dict | None = None,
 ) -> dict:
-    state = torch.load(checkpoint_path, map_location="cpu")
+    if state is None:
+        state = torch.load(checkpoint_path, map_location="cpu")
     if weights_key not in state:
         raise KeyError(f"Checkpoint missing '{weights_key}'. Available: {list(state.keys())}")
     if "tag_to_id" not in state:
@@ -132,12 +162,18 @@ def transfer_weights(
     else:
         query_count = 0
 
+    projector_loaded = getattr(model, "projector", None) is not None
+    if verbose:
+        print(f"    Projector    : {'random init' if projector_loaded else 'n/a'}")
+
     if verbose:
         def _module_status(loaded, skipped):
             if not loaded and skipped == 0:
                 return "not found"
-            if skipped == 0:
-                return "transferred"
+            if loaded and skipped == 0:
+                return f"transferred ({len(loaded)} tensors)"
+            if not loaded and skipped > 0:
+                return f"not transferred ({skipped} shape mismatches)"
             return f"transferred ({len(loaded)} loaded, {skipped} skipped)"
 
         src_name = Path(checkpoint_path).name
@@ -163,7 +199,7 @@ def transfer_weights(
         print(f"    Backbone     : {_module_status(backbone_loaded, backbone_skipped)}")
         print(f"    Cross-attn   : {_module_status(cross_attn_loaded, cross_attn_skipped)}")
         print(f"    Classifier   : {_module_status(classifier_loaded, classifier_skipped)}")
-        print(f"    Tag queries  : {query_count} / {len(new_tags)} transferred")
+        print(f"    Tag queries  : {query_count} / {len(new_tags)} student tags, matched from {len(old_tags)} teacher queries")
         print(f"{'=' * 50}\n")
 
     return {

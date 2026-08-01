@@ -1,2 +1,1 @@
-- [ ] Recipe for training smaller models: KD, Head transfer.
 - [ ] Another self-attention block for the head => more semantic for the tags.
