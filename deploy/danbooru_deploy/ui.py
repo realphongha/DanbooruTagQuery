@@ -94,13 +94,16 @@ def build_app(
 
     /* wider layout — don't cap the container */
     .gradio-container { max-width: 100% !important; }
+    /* image box fills the left column, matching the params box height on the
+       right; object-fit: contain letterboxes (no crop) */
+    #dq-image { display: flex; flex-direction: column; }
     #dq-image .image-container,
     #dq-image .image-preview-container {
-        width: 100%;
-        aspect-ratio: 1 / 1;         /* square */
+        flex: 1;
+        min-height: 320px;
     }
     #dq-image .image-container img {
-        object-fit: contain !important;   /* show whole image, pad, no crop */
+        object-fit: contain !important;   /* whole image, padded, no crop */
         width: 100% !important;
         height: 100% !important;
         background: #000;
@@ -117,8 +120,6 @@ def build_app(
                     type="pil",
                     sources=["upload", "clipboard"],
                     elem_id="dq-image",
-                    width=512,
-                    height=512,
                 )
                 url_input = gr.Textbox(
                     label="Image URL",
