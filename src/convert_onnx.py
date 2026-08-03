@@ -23,11 +23,12 @@ def convert(
 ) -> Path:
     """Export a trained checkpoint to FP32 ONNX.
 
-    Produces a model directory with three files:
+    Produces a model directory with four files:
         <output>/
             model.onnx            — the ONNX model (FP32)
             tag_to_id.json        — tag name → index mapping
             config.json           — export-time config metadata
+            tag_category.json     — tag → category mapping (via prebuild_cache)
 
     Returns the path to the produced ONNX file.
     """
@@ -114,6 +115,21 @@ def convert(
     }
     config_path = model_dir / "config.json"
     config_path.write_text(json.dumps(config_out, indent=2))
+
+    # ── tag_category.json (HF dataset + Danbooru API fallback) ────────────
+    # The deploy Packages expect a 4-file model dir; prebuild_cache fills
+    # categories for every tag in the exported tag map, so exports are
+    # self-contained (no manual hub upload needed).
+    try:
+        from tools.prebuild_cache import prebuild
+        if verbose:
+            print("Generating tag_category.json …")
+        prebuild(tag_map_path)
+    except Exception as exc:
+        if verbose:
+            print(f"Warning: could not prebuild tag categories: {exc}")
+        print("  (tag_to_id.json + config.json still written; "
+              "tag_category.json is required by the deploy Predictor)")
 
     if verbose:
         print(f"Tag map saved:      {tag_map_path}")
