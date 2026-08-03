@@ -305,7 +305,7 @@ def build_app(
             state["all_logits"] = None
             state["tag_metadata"] = None
             state["current_image"] = None
-            return None, "", "<i>No results yet.</i>", "Cleared.", "", ""
+            return None, "", "<i>No results yet.</i>", "", "Cleared.", "", ""
 
         clear_btn.click(
             fn=on_clear,
