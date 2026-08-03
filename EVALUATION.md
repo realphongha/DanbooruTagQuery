@@ -29,7 +29,7 @@ All models evaluated on the same **custom intersection evaluation set**: 3383 ta
 | DeepDanbooru | 161.0M | 512×512 | 33.6ms | 0.2100 | 0.1920 | 0.4692 | 0.15 |
 | WD-eva02 | 315.2M | 448×448 | 50.3ms | 0.4822 | 0.4344 | 0.6684 | 0.30 |
 | WD-SwinV2 | 98.0M | 448×448 | 35.8ms | 0.4603 | 0.4140 | 0.6474 | 0.15 |
-| ML-Danbooru | N/A | 448×448 | 34.0ms | 0.4023 | 0.3490 | 0.5952 | 0.60 |
+| ML-Danbooru | 68.9M | 448×448 | 34.0ms | 0.4023 | 0.3490 | 0.5952 | 0.60 |
 | JoyTag | 91.5M | 448×448 | 20.2ms | 0.3783 | 0.3429 | 0.6179 | 0.35 |
 
 ### Key Results
