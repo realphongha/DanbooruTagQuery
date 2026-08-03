@@ -202,6 +202,25 @@ Launch a Gradio web interface:
 uv run python -m src.infer checkpoints/best.pt --ui
 ```
 
+#### Quick run via `danbooru-deploy` (standalone ONNX package)
+
+For a zero-training quick start, a standalone installable package lives in [`deploy/`](deploy/) (`danbooru-deploy`). It is torch-free and needs only an ONNX model directory:
+
+```bash
+pip install "git+https://github.com/realphongha/DanbooruTagQuery.git#subdirectory=deploy[hf]"
+# Web UI: auto-download default model from HF hub, force CPU
+# (flags: --cpu for CPU, omit for CUDA-if-available; no args → hub default)
+danbooru-deploy --cpu
+
+# Web UI against a local model dir (.onnx + sidecar JSONs)
+danbooru-deploy --cpu models/model
+
+# Tag a single image, print top-20
+# danbooru-deploy models/model image.jpg
+```
+
+See [`deploy/README.md`](deploy/README.md) for full install/run options (`[hf]` extra for hub download, `[gpu]` extra for CUDA).
+
 ## ONNX Export
 
 Convert a PyTorch checkpoint to ONNX for faster CPU inference or deployment:
