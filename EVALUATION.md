@@ -11,7 +11,9 @@
 
 ## Comparison Methodology
 We compared our model to other popular methods from the community.
-All models evaluated on the same **custom intersection evaluation set**: 3383 tags that appear in every model's vocabulary. Models with larger or smaller vocabularies are reduced to this common subset so scores are directly comparable.
+The comparison dataset was extracted from our evaluation set (see `get_test_set_2024.ipynb`), we only keep images with post ID > 7220105 to avoid contamination with WD-SwinV2 training data. Sample 5K, filter by active tags.
+Then all models were evaluated on the same **intersection evaluation subset**: 3383 tags that appear in every model's vocabulary.
+Models with larger or smaller vocabularies are reduced to this common subset so scores are directly comparable.
 
 - **Input resolution** listed per model — where models differ (DeepDanbooru at 512×512 vs 448×448), we use each model's native resolution.
 - **Latency** measured on a single NVIDIA RTX 5090 (PyTorch eager, batch size 1, CUDA timing). ONNX runtime used for ONNX-exported models.
