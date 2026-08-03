@@ -1,5 +1,4 @@
-"""
-Gradio web UI for DanbooruTagQuery inference.
+"""Gradio web UI for DanbooruTagQuery inference.
 
 Uses tag_category.json sidecar — no SQLite, no API calls.
 """
@@ -7,38 +6,21 @@ Uses tag_category.json sidecar — no SQLite, no API calls.
 from __future__ import annotations
 
 import tempfile
-from pathlib import Path
 
 import gradio as gr
-import numpy as np
 from PIL import Image
 
-# ── constants ────────────────────────────────────────────────────────────────
+from .core import CATEGORY_MAP, get_category_name
 
 DEFAULT_TOP_K = None
 DEFAULT_MIN_SCORE = 0.2
 
-CATEGORY_MAP = {
-    0: "general",
-    1: "artist",
-    3: "copyright",
-    4: "character",
-    5: "meta",
-}
-
 _CATEGORY_NAMES = sorted(CATEGORY_MAP.values())
-
-
-def get_category_name(cat_map: dict[str, int], tag: str) -> str:
-    cat_id = cat_map.get(tag, 0)
-    return CATEGORY_MAP.get(cat_id, "general")
 
 
 def format_tag(tag: str, use_underscore: bool) -> str:
     return tag if use_underscore else tag.replace("_", " ")
 
-
-# ── tag metadata enrichment (static cat_map) ────────────────────────────────
 
 def enrich_tags(
     tags_scores: list[tuple[str, float]], cat_map: dict[str, int]
@@ -51,8 +33,6 @@ def enrich_tags(
         }
     return result
 
-
-# ── Gradio app ───────────────────────────────────────────────────────────────
 
 def build_app(predict_fn, cat_map: dict[str, int]):
     """Build Gradio app.
@@ -142,8 +122,6 @@ def build_app(predict_fn, cat_map: dict[str, int]):
                 scale=3,
             )
         tag_query_output = gr.HTML(label="Results")
-
-        # ── helpers ────────────────────────────────────────────────────────
 
         def refresh_results(
             _top_k, _min_score, _sort_by, _use_underscore, _categories,
