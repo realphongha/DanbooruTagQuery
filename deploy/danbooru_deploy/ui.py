@@ -91,6 +91,20 @@ def build_app(
     #copy-csv-btn { position: absolute; top: 4px; right: 4px; z-index: 10;
                     min-width: 0; padding: 0 6px; height: 24px;
                     font-size: 13px; line-height: 24px; }
+
+    /* wider layout — don't cap the container */
+    .gradio-container { max-width: 100% !important; }
+    #dq-image .image-container,
+    #dq-image .image-preview-container {
+        width: 100%;
+        aspect-ratio: 1 / 1;         /* square */
+    }
+    #dq-image .image-container img {
+        object-fit: contain !important;   /* show whole image, pad, no crop */
+        width: 100% !important;
+        height: 100% !important;
+        background: #000;
+    }
     """
 
     with gr.Blocks(title="DanbooruTagQuery", theme=gr.themes.Soft(), css=css) as app:
@@ -102,7 +116,9 @@ def build_app(
                     label="Image",
                     type="pil",
                     sources=["upload", "clipboard"],
-                    height=300,
+                    elem_id="dq-image",
+                    width=512,
+                    height=512,
                 )
                 url_input = gr.Textbox(
                     label="Image URL",
