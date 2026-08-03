@@ -1,4 +1,6 @@
 import argparse
+import gc
+import importlib.util
 import json
 import math
 import os
@@ -14,7 +16,7 @@ from tqdm import tqdm
 
 from .config import TrainConfig
 from .dataset import make_loader
-from .losses import build_loss
+from .losses import build_loss, kd_logits_loss
 from .metrics import multilabel_metrics, print_metrics
 from .model import ImageTagger, transfer_weights
 from .transforms import train_transforms, val_transforms
@@ -61,6 +63,159 @@ class EMA:
 
 def _clean(sd):
     return {k.removeprefix("_orig_mod."): v for k, v in sd.items()}
+
+
+def _describe_model(model, config) -> list[str]:
+    """Compact model card printed before training (backbone / head / projector)."""
+    backbone_n = sum(p.numel() for p in model.backbone.parameters())
+    head_n = sum(p.numel() for p in model.head.parameters())
+    total = backbone_n + head_n
+    lines = [
+        f"  Model: {config.model_name}",
+        f"    Backbone : {backbone_n / 1e6:.1f}M params, embed dim {model.backbone.num_features}",
+        f"    Head     : {head_n / 1e6:.1f}M params, embed dim {model.head.tag_queries.shape[1]}, {config.num_classes} tags",
+    ]
+    if getattr(model, "projector", None) is not None:
+        proj = model.projector.proj
+        proj_n = sum(p.numel() for p in model.projector.parameters())
+        lines.append(f"    Projector: {proj_n / 1e6:.1f}M params ({proj.in_features} -> {proj.out_features})")
+        total += proj_n
+    lines.append(f"    Total    : {total / 1e6:.1f}M trainable params")
+    return lines
+
+
+def load_config_module(path: str) -> TrainConfig:
+    """Load an experiment config module that exports `config = TrainConfig(...)`."""
+    p = Path(path).resolve()
+    if not p.exists():
+        raise FileNotFoundError(f"Config file not found: {path}")
+    spec = importlib.util.spec_from_file_location(f"dtq_cfg_{p.stem}", p)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    cfg = getattr(mod, "config", None)
+    if not isinstance(cfg, TrainConfig):
+        raise TypeError(
+            f"Config module {path} must expose `config` as a TrainConfig instance, got {type(cfg).__name__}"
+        )
+    return cfg
+
+
+def _peek_head_embed_dim(state: dict, weights_key: str = "model_ema") -> int:
+    """Recover the head embed dim from a checkpoint's state dict."""
+    w = state[weights_key]
+    key = "head.cross_attn.in_proj_weight"
+    if key in w:
+        return w[key].shape[0] // 3  # MultiheadAttention in_proj: (3*d, d)
+    key2 = "head.tag_queries"
+    if key2 in w:
+        return w[key2].shape[1]
+    raise KeyError(
+        f"Cannot determine head embed dim from checkpoint (missing {key} / {key2})"
+    )
+
+
+class _KdTeacher:
+    """Frozen logits teacher for distillation: PyTorch (.pt) or ONNX dir.
+
+    logits(images) -> float32 logits tensor on the training device.  The .pt
+    path builds the teacher from its own saved config (model_name, projector),
+    loads model_ema (fallback model), freezes it, and validates that the
+    student's tag vocabulary is a SUBSET of the teacher's (exact match and
+    subsets are both fine; student-only tags raise).  For subsets, expose
+    `student_slice` (teacher indices in student tag order) so the loss can
+    align teacher logits to the student's vocab.
+    """
+
+    def __init__(self, path: str, tag_to_id: dict[str, int], dev, is_main: bool = True):
+        p = Path(path)
+        if p.name == "model.onnx":
+            onnx_file = p
+        elif p.is_dir() and (p / "model.onnx").exists():
+            onnx_file = p / "model.onnx"
+        else:
+            onnx_file = None
+        self.dev = dev
+        self._model = None
+        self._sess = None
+        self._input = None
+        self._output = None
+        self.student_slice = None  # LongTensor (teacher indices) when student vocab is a subset
+
+        if onnx_file is not None:
+            import onnxruntime as ort
+
+            self._sess = ort.InferenceSession(
+                str(onnx_file),
+                providers=[("CUDAExecutionProvider", {}), "CPUExecutionProvider"],
+            )
+            self._input = self._sess.get_inputs()[0].name
+            self._output = self._sess.get_outputs()[0].name
+            sidecar = onnx_file.parent / "tag_to_id.json"
+            if sidecar.exists():
+                saved = json.loads(sidecar.read_text())
+                self._set_vocab_mapping(saved, tag_to_id)
+        else:
+            try:
+                state = torch.load(path, map_location="cpu", mmap=True)  # weights_only=True (safe: our ckpts)
+            except (RuntimeError, OSError, ValueError, TypeError):
+                state = torch.load(path, map_location="cpu", weights_only=False)
+            saved = state.get("tag_to_id", {})
+            self._set_vocab_mapping(saved, tag_to_id)
+            tcfg = state.get("config", {})
+            tname = tcfg.get("model_name")
+            if not tname:
+                raise RuntimeError(f"Teacher checkpoint missing 'config.model_name': {path}")
+            proj = tcfg.get("projector") or ""
+            head_embed = None
+            if proj:
+                parts = str(proj).split(":")
+                if len(parts) == 2:
+                    head_embed = int(parts[1])
+                else:
+                    raise RuntimeError(f"Invalid teacher projector field: {proj!r}")
+            teacher = ImageTagger(tname, len(saved), pretrained=False, head_embed_dim=head_embed)
+            weights = state.get("model_ema") or state.get("model")
+            if weights is None:
+                raise RuntimeError(f"Teacher checkpoint has neither 'model_ema' nor 'model': {path}")
+            teacher.load_state_dict(weights)
+            teacher.to(dev).eval()
+            for p in teacher.parameters():
+                p.requires_grad_(False)
+            self._model = teacher
+
+        if is_main:
+            kind = "ONNX" if self._sess is not None else "PyTorch"
+            vocab = ""
+            if self.student_slice is not None:
+                vocab = f" (vocab subset {len(self.student_slice)}/{len(saved)})"
+            print(f"  [KD] teacher: {Path(path).name} ({kind}, frozen, eval{vocab})")
+
+    def _set_vocab_mapping(self, teacher_vocab: dict, student_vocab: dict) -> None:
+        """Align student tags to teacher indices.
+
+        Student tags are ordered by their id (student logits are positional).
+        Every student tag must exist in the teacher; student-only tags raise.
+        """
+        student_sorted = sorted(student_vocab.items(), key=lambda kv: kv[1])
+        missing = [name for name, _ in student_sorted if name not in teacher_vocab]
+        if missing:
+            shown = ", ".join(missing[:20])
+            raise RuntimeError(
+                f"Teacher is missing {len(missing)} student tags (can't distill unknown tags): {shown}"
+            )
+        slices = [teacher_vocab[name] for name, _ in student_sorted]
+        if len(teacher_vocab) == len(slices) and slices == list(range(len(slices))):
+            self.student_slice = None  # identical vocab, already aligned
+        else:
+            self.student_slice = torch.tensor(slices, dtype=torch.long)
+
+    @torch.no_grad()
+    def logits(self, images) -> torch.Tensor:
+        if self._sess is not None:
+            np_in = images.float().cpu().numpy()
+            raw = self._sess.run([self._output], {self._input: np_in})[0]
+            return torch.as_tensor(raw, dtype=torch.float32, device=self.dev)
+        return self._model(images)
 
 
 def run(config):
@@ -160,16 +315,54 @@ def run(config):
     train = make_loader(config.train_parquet, config, train_transforms(config.image_size), True)
     val = make_loader(config.val_parquet, config, val_transforms(config.image_size), False)
 
-    model = ImageTagger(config.model_name, config.num_classes, tag_embeddings=tag_embeddings).to(dev)
-    if args.checkpoint:
-        stats = transfer_weights(model, tag_to_id, args.checkpoint, weights_key="model_ema", verbose=is_main)
+    # Transfer source: config.checkpoint (CLI --checkpoint already applied to
+    # config earlier).  Peek the teacher's head embed dim so the head is built
+    # at the teacher's dim and a projector bridges any backbone dim mismatch.
+    # mmap=True keeps the 4.8GB source out of RAM; it is freed after transfer.
+    transfer_state = None
+    head_embed = None
+    if config.checkpoint and config._resume_ckpt is None:
+        try:
+            transfer_state = torch.load(config.checkpoint, map_location="cpu", mmap=True)
+        except (RuntimeError, OSError, ValueError):
+            transfer_state = torch.load(config.checkpoint, map_location="cpu")
+        head_embed = _peek_head_embed_dim(transfer_state)
+    elif config.projector_dims():
+        head_embed = config.projector_dims()[1]
+
+    model = ImageTagger(
+        config.model_name,
+        config.num_classes,
+        tag_embeddings=tag_embeddings,
+        head_embed_dim=head_embed,
+    ).to(dev)
+
+    if transfer_state is not None:
+        teacher_embed = _peek_head_embed_dim(transfer_state)
+        backbone_dim = model.backbone.num_features
+        if teacher_embed != backbone_dim:
+            config.projector = f"{backbone_dim}:{teacher_embed}"
+        else:
+            config.projector = ""
+        if is_main:
+            print(f"  Transfer source: {config.checkpoint} (head embed dim {teacher_embed})")
+        stats = transfer_weights(model, tag_to_id, config.checkpoint, weights_key="model_ema", verbose=is_main, state=transfer_state)
         if is_main:
             print(f"  Transferred {stats['query_transfer_count']} / {stats['new_tag_count']} tag queries")
+        del transfer_state
+        gc.collect()
+        if is_main:
+            print("  Freed transfer checkpoint from RAM (teacher for KD loads separately)")
 
     if config._resume_ckpt is not None:
         model.load_state_dict(config._resume_ckpt["model"], strict=True)
         if is_main:
             print(f"  Restored model weights from checkpoint (epoch {config._resume_ckpt.get('epoch', 0)})")
+
+    if is_main:
+        for line in _describe_model(model, config):
+            print(line)
+        # print(model)
 
     if is_main:
         # EMA lives only on rank 0.  Gradients are synced by DDP so model
@@ -200,22 +393,21 @@ def run(config):
 
     loss_fn = build_loss()
 
-    backbone_params = (
-        model.module.backbone.parameters() if distributed else model.backbone.parameters()
-    )
-    head_params = (
-        model.module.head.parameters() if distributed else model.head.parameters()
-    )
+    raw = model.module if distributed else model
+    backbone_params = raw.backbone.parameters()
+    head_params = raw.head.parameters()
+    param_groups = [
+        {"params": backbone_params, "lr": config.learning_rate * config.backbone_lr_mult},
+        {"params": head_params, "lr": config.learning_rate * config.head_lr_mult},
+    ]
+    if raw.projector is not None:
+        param_groups.append(
+            {"params": raw.projector.parameters(), "lr": config.learning_rate * config.proj_lr_mult}
+        )
     try:
-        optimizer = AdamW([
-            {"params": backbone_params, "lr": config.learning_rate * config.backbone_lr_mult},
-            {"params": head_params},
-        ], lr=config.learning_rate, weight_decay=config.weight_decay, fused=True)
+        optimizer = AdamW(param_groups, lr=config.learning_rate, weight_decay=config.weight_decay, fused=True)
     except TypeError:
-        optimizer = AdamW([
-            {"params": backbone_params, "lr": config.learning_rate * config.backbone_lr_mult},
-            {"params": head_params},
-        ], lr=config.learning_rate, weight_decay=config.weight_decay)
+        optimizer = AdamW(param_groups, lr=config.learning_rate, weight_decay=config.weight_decay)
 
     steps = config.epochs * len(train); warmup = config.warmup_epochs * len(train)
     scheduler = LambdaLR(optimizer, lambda step: (step + 1) / max(1, warmup) if step < warmup else 0.5 * (1 + math.cos(math.pi * (step - warmup) / max(1, steps - warmup))))
@@ -232,15 +424,34 @@ def run(config):
 
     amp = dev.type == "cuda"; ctx = torch.autocast(device_type=dev.type, dtype=torch.bfloat16) if amp else nullcontext()
 
+    teacher = None
+    if config.teacher_path:
+        if config.kd_weight > 0:
+            teacher = _KdTeacher(config.teacher_path, tag_to_id, dev, is_main=is_main)
+            if is_main:
+                print(f"  [KD] kd_weight={config.kd_weight}")
+        elif is_main:
+            print(f"  [KD] teacher_path set but kd_weight=0 — teacher NOT loaded; remove teacher_path to fully disable KD")
+
     for epoch in range(start_epoch, config.epochs):
         if distributed and hasattr(train.sampler, "set_epoch"):
             train.sampler.set_epoch(epoch)
+
+        if dev.type == "cuda":
+            torch.cuda.reset_peak_memory_stats()  # measure this epoch only (post-compile)
 
         started = time.time(); model.train(); total = 0.0
         train_iter = tqdm(train, desc=f"Epoch {epoch + 1}/{config.epochs}") if is_main else train
         for batch in train_iter:
             optimizer.zero_grad(set_to_none=True)
-            with ctx: loss = loss_fn(model(batch["image"].to(dev, non_blocking=True)), batch["labels"].to(dev, non_blocking=True))
+            with ctx:
+                student_logits = model(batch["image"].to(dev, non_blocking=True))
+                loss = loss_fn(student_logits, batch["labels"].to(dev, non_blocking=True))
+                if teacher is not None:
+                    teacher_logits = teacher.logits(batch["image"].to(dev, non_blocking=True))
+                    loss = loss + config.kd_weight * kd_logits_loss(
+                        student_logits, teacher_logits, teacher_slice=teacher.student_slice
+                    )
             loss.backward(); optimizer.step(); scheduler.step(); total += loss.item()
             if is_main:
                 raw = model.module if distributed else model
@@ -312,6 +523,11 @@ def run(config):
                 print(f"Epoch {epoch + 1}/{config.epochs}  train_loss={total / len(train):.6f}  lr={optimizer.param_groups[0]['lr']:.2e}  duration={time.time() - started:.1f}s")
 
         if is_main:
+            if dev.type == "cuda":
+                print(
+                    f"  VRAM: peak {torch.cuda.max_memory_allocated() / 2**30:.2f} GiB | "
+                    f"reserved {torch.cuda.memory_reserved() / 2**30:.2f} GiB"
+                )
             with (config.run_dir / "metrics.jsonl").open("a") as file: file.write(json.dumps(row) + "\n")
             raw = model.module if distributed else model
             state = {"model": _clean(raw.state_dict()), "model_ema": ema.shadow, "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(), "epoch": epoch + 1, "config": config.to_dict(), "tag_to_id": tag_to_id, "metrics": row, "best": best, "world_size": get_world_size()}
@@ -326,22 +542,32 @@ def run(config):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument("--config", type=str, default=None,
+                        help="Path to experiment config module exporting `config` (a TrainConfig instance)")
     parser.add_argument("--epochs", type=int)
     parser.add_argument("--no-wandb", action="store_true")
     parser.add_argument("--checkpoint", type=str, default=None,
-                        help="Path to pretrained checkpoint for weight transfer")
+                        help="Path to pretrained checkpoint for weight transfer (overrides config.checkpoint)")
     parser.add_argument("--resume", type=str, default=None,
                         help="Resume training from checkpoint (e.g., runs/.../checkpoints/last.pt)")
     parser.add_argument("--wandb-run-id", type=str, default=None,
                         help="Wandb run ID to resume (creates new run if omitted)")
     parser.add_argument("--batch-size", type=int,
                         help="Override batch size per GPU (e.g., 24 for 2x4090)")
+    parser.add_argument("--teacher-path", type=str, default=None,
+                        help="Teacher checkpoint (.pt) or ONNX dir for logits distillation (overrides config.teacher_path)")
+    parser.add_argument("--kd-weight", type=float, default=None,
+                        help="KD loss weight, default 0.5 (requires a teacher source)")
     args = parser.parse_args()
 
     if args.resume and args.checkpoint:
         parser.error("--resume and --checkpoint are mutually exclusive")
     if args.resume and (args.epochs is not None or args.batch_size is not None):
         parser.error("--resume is mutually exclusive with --epochs and --batch-size (checkpoint config is authoritative)")
+    if args.resume and args.config:
+        parser.error("--resume and --config are mutually exclusive (checkpoint config is authoritative)")
+    if args.kd_weight is not None and args.kd_weight < 0:
+        parser.error("--kd-weight must be >= 0")
 
     local_rank = int(os.environ.get("LOCAL_RANK", "-1"))
     if local_rank >= 0:
@@ -361,18 +587,33 @@ if __name__ == "__main__":
                     val = Path(val)
                 setattr(config, field, val)
         config.no_wandb = args.no_wandb
+        if args.teacher_path:
+            config.teacher_path = args.teacher_path
+        if args.kd_weight is not None:
+            config.kd_weight = args.kd_weight
         config._resume_ckpt = ckpt
         config._resume_path = args.resume
     else:
-        config = TrainConfig()
+        config = load_config_module(args.config) if args.config else TrainConfig()
         config.no_wandb = args.no_wandb
         if args.epochs:
             config.epochs = args.epochs
         if args.batch_size:
             config.batch_size = args.batch_size
+        if args.checkpoint:
+            config.checkpoint = args.checkpoint
+        if args.teacher_path:
+            config.teacher_path = args.teacher_path
+        if args.kd_weight is not None:
+            config.kd_weight = args.kd_weight
         config._resume_ckpt = None
         config._resume_path = None
     config._wandb_run_id = args.wandb_run_id
+
+    if args.kd_weight is not None and not config.teacher_path:
+        parser.error("--kd-weight requires --teacher-path (or config.teacher_path)")
+    if config.kd_weight < 0:
+        parser.error("--kd-weight must be >= 0")
 
     run(config)
 

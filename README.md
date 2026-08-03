@@ -75,7 +75,7 @@ After downloading the images, start training with:
 uv run python -m src.train
 ```
 
-The default configuration uses 256px images, batch size 128, 30 epochs, AdamW, cosine decay with five warmup epochs, BCE-with-logits loss, and BF16 automatic mixed precision on CUDA.
+The default configuration uses 448px images, batch size 48, 20 epochs, AdamW, cosine decay with two warmup epochs, BCE-with-logits loss, and BF16 automatic mixed precision on CUDA.
 
 Checkpoints are written to:
 
@@ -91,6 +91,59 @@ uv run python -m src.train --epochs 1
 ```
 
 Training metrics are appended to `runs/metrics.jsonl`.
+
+### Config files & experiments
+
+Per-experiment Python configs live in `src/configs/` (each module exports a `TrainConfig` instance). Load one with `--config`:
+
+```bash
+uv run python -m src.train --config src/configs/config_dinov3_l16_fromscratch_fulldata.py
+```
+
+Available configs:
+
+| Config | Purpose |
+|---|---|
+| `config_dinov3_l16_fromscratch_fulldata.py` | Reference: DINOv3 L/16 from scratch, full dataset (mirrors defaults) |
+| `config_dinov3_l16_to_b16_transfer.py` | Transfer: B/16 student reusing the trained L/16 head via a projector |
+| `config_dinov3_b16_kd.py` | Knowledge distillation: B/16 student trained against the frozen L/16 teacher |
+| `config_dinov3_l16_to_s16_transfer_kd_litedata.py` | Transfer + KD on lite data: S/16 student reusing the L/16 head AND distilling from the frozen L/16 teacher |
+
+CLI flags (`--epochs`, `--batch-size`, `--checkpoint`, `--teacher-path`, `--kd-weight`) override fields set in the config file. Paths inside config files are relative to the repo root.
+
+**Vocab note:** transfer remaps the vocabulary by tag name (different tag counts are fine — matched tags transfer, student-only tags start random). KD aligns teacher logits to the student vocab, but only for tags the teacher knows: the student vocab must be a subset of the teacher's (the trained L/16 teacher covers 11,424 of the 11,516 tags in `data/tag_to_id.json`). KD configs point `tag_to_id` at `data/tag_to_id_l16_teacher.json` (extracted from the checkpoint) or a lite vocab.
+
+### Transfer learning (scaling down)
+
+Reuse the trained L/16 head on a smaller backbone. When the checkpoint's head embed dim differs from the backbone dim, a trainable projector (`nn.Linear`) is inserted automatically; the head is built at the teacher's dim so it transfers 1:1 (tag queries remap by vocabulary index):
+
+```bash
+uv run python -m src.train --config src/configs/config_dinov3_l16_to_b16_transfer.py
+```
+
+Per-run controls (config fields, overridable via CLI):
+
+- `checkpoint` — transfer source `.pt` (CLI `--checkpoint`)
+- `head_lr_mult` — LR multiplier for the transferred head (0.01: keep teacher init)
+- `proj_lr_mult` — LR multiplier for the random projector (1.0: new layer must adapt)
+- `backbone_lr_mult` — LR multiplier for the pretrained backbone (0.1: standard finetune)
+
+The projector participates in the optimizer (separate param group), scheduler, and EMA. The checkpoint's `config` records `projector` ("in:out") so resume, ONNX export, and inference rebuild it correctly.
+
+### Knowledge distillation
+
+Logits distillation from a frozen teacher (`.pt` or ONNX dir). Loss per batch: `BCE(gt, student) + kd_weight * KL(log_softmax(student), log_softmax(teacher))` (softmax KL, temperature 1):
+
+```bash
+uv run python -m src.train --config src/configs/config_dinov3_b16_kd.py
+# or explicitly:
+uv run python -m src.train --config ... --teacher-path models/dtq_dinov3l16_448x448_ep13_bestmAP.pt --kd-weight 0.5
+```
+
+- `--teacher-path` — teacher `.pt` checkpoint (built from its own saved config, frozen, eval) or an ONNX model dir/file (session I/O names resolved automatically).
+- `--kd-weight` — default 0.5; requires a teacher source.
+- Teacher tag vocabulary must match the student's exactly.
+- Validation loss stays pure BCE; best-checkpoint selection is unchanged.
 
 ### Multi-GPU Training (DDP)
 

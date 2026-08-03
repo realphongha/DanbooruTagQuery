@@ -55,9 +55,16 @@ class ExplorerInference:
         cfg = state.get("config", {})
         self.image_size = cfg.get("image_size", 448)
         self.model_name = cfg.get("model_name", "vit_base_patch16_dinov3.lvd1689m")
+        proj = cfg.get("projector") or ""
+        head_embed = None
+        if proj:
+            parts = str(proj).split(":")
+            if len(parts) == 2:
+                head_embed = int(parts[1])
         self.model = ImageTagger(
             self.model_name, self.num_classes,
             pretrained=False,
+            head_embed_dim=head_embed,
         )
         weights = state.get("model_ema") or state.get("model")
         self.model.load_state_dict(weights)

@@ -69,10 +69,18 @@ class OursModel(BaseModel):
             state = torch.load(self._checkpoint, map_location="cpu", weights_only=False)
             self._tags = list(state["tag_to_id"].keys())
             self._config.num_classes = len(self._tags)
+            # Build from the checkpoint's saved config (arch may differ from defaults)
+            ckpt_cfg = state.get("config", {})
+            self._config.model_name = ckpt_cfg.get("model_name", self._config.model_name)
+            self._config.image_size = ckpt_cfg.get("image_size", self._config.image_size)
+            proj = ckpt_cfg.get("projector") or ""
+            self._config.projector = str(proj)
+            proj_dims = self._config.projector_dims()
             model = ImageTagger(
                 self._config.model_name,
                 self._config.num_classes,
                 pretrained=False,
+                head_embed_dim=proj_dims[1] if proj_dims else None,
             )
             model.load_state_dict(state["model_ema"])
             model.eval()

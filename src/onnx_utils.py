@@ -56,6 +56,7 @@ def load_config(checkpoint: str) -> TrainConfig:
         cfg.image_size = data.get("image_size", cfg.image_size)
         cfg.model_name = data.get("model_name", cfg.model_name)
         cfg.num_classes = data.get("num_classes", 0)
+        cfg.projector = data.get("projector", "")
         return cfg
     raise FileNotFoundError(f"Missing config: {sidecar}")
 
@@ -125,10 +126,12 @@ class Predictor:
         else:
             self._device = device or ("cuda" if torch.cuda.is_available() else "cpu")
             state = torch.load(self.checkpoint, map_location="cpu", weights_only=False)
+            proj = self.config.projector_dims()
             model = ImageTagger(
                 self.config.model_name,
                 self.config.num_classes,
                 pretrained=False,
+                head_embed_dim=proj[1] if proj else None,
             )
             weights = state.get("model_ema") or state.get("model")
             model.load_state_dict(weights)
