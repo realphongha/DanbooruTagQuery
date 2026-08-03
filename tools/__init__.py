@@ -1,1 +1,1 @@
-"""DanbooruTagQuery tooling: API, cache, UI, deployment."""
+"""DanbooruTagQuery tooling: API, image download, explorer."""

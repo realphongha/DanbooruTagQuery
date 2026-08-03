@@ -14,6 +14,100 @@ import torch
 from .config import TrainConfig
 from .model import ImageTagger
 
+# ── tag category lookup ───────────────────────────────────────────────────
+
+HF_DATASET = "qdlabs/danbooru-tags"
+API_WORKERS = 2
+
+
+def _load_hf_category_map() -> dict[str, int]:
+    from datasets import load_dataset
+
+    ds = load_dataset(HF_DATASET, split="train")
+    return {row["name"]: row["category"] for row in ds}
+
+
+def _api_tag_category(tag: str) -> int | None:
+    """Fetch tag category from Danbooru API. Returns None on failure."""
+    from tools.api import tag_info
+
+    try:
+        info = tag_info(tag)
+        if info is not None:
+            return info["category"]
+    except Exception as exc:
+        print(f"  API error for '{tag}': {exc}")
+    return None
+
+
+def _api_lookup_parallel(tags: list[str]) -> dict[str, int]:
+    """Fetch categories in parallel via thread pool."""
+    import concurrent.futures
+
+    from tqdm import tqdm
+
+    results: dict[str, int] = {}
+
+    def fetch(tag: str) -> tuple[str, int]:
+        cat = _api_tag_category(tag)
+        return tag, cat if cat is not None else 0
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=API_WORKERS) as pool:
+        futs = [pool.submit(fetch, tag) for tag in tags]
+        for fut in tqdm(
+            concurrent.futures.as_completed(futs),
+            total=len(futs),
+            desc="API",
+        ):
+            tag, cat = fut.result()
+            results[tag] = cat
+    return results
+
+
+def _build_tag_category(
+    tag_to_id: dict[str, int], out_dir: Path, verbose: bool = True
+) -> Path:
+    """Fill category for every tag; write tag_category.json into out_dir.
+
+    Sources, in order: HF dataset (qdlabs/danbooru-tags), then Danbooru API
+    fallback (missing/failed default to general). Requires `datasets`,
+    `tqdm`, and optionally `tools.api` (curl_cffi).
+    """
+    tags = sorted(tag_to_id.keys(), key=lambda t: tag_to_id[t])
+    json_path = out_dir / "tag_category.json"
+
+    existing: dict[str, int] = {}
+    if json_path.exists():
+        existing = json.loads(json_path.read_text())
+
+    missing = [t for t in tags if t not in existing]
+    print(f"Categories: {len(tags)} total, {len(existing)} cached, {len(missing)} missing")
+
+    lookup: dict[str, int] = existing
+    if missing:
+        print(f"Loading category map from {HF_DATASET} …")
+        cat_map = _load_hf_category_map()
+        found = sum(1 for t in missing if t in cat_map)
+        print(f"  {found}/{len(missing)} found in dataset")
+
+        api_needed: list[str] = []
+        for tag in missing:
+            cat = cat_map.get(tag)
+            if cat is not None:
+                lookup[tag] = cat
+            else:
+                api_needed.append(tag)
+
+        if api_needed:
+            print(f"  {len(api_needed)} not in dataset, fetching from Danbooru API "
+                  f"({API_WORKERS} workers) …")
+            lookup.update(_api_lookup_parallel(api_needed))
+
+    json_path.write_text(json.dumps(lookup, indent=0) + "\n")
+    if verbose:
+        print(f"Category map saved: {json_path} ({len(lookup)} tags)")
+    return json_path
+
 
 def convert(
     checkpoint: str,
@@ -28,7 +122,7 @@ def convert(
             model.onnx            — the ONNX model (FP32)
             tag_to_id.json        — tag name → index mapping
             config.json           — export-time config metadata
-            tag_category.json     — tag → category mapping (via prebuild_cache)
+            tag_category.json     — tag → category mapping (HF dataset + API)
 
     Returns the path to the produced ONNX file.
     """
@@ -117,17 +211,15 @@ def convert(
     config_path.write_text(json.dumps(config_out, indent=2))
 
     # ── tag_category.json (HF dataset + Danbooru API fallback) ────────────
-    # The deploy Packages expect a 4-file model dir; prebuild_cache fills
-    # categories for every tag in the exported tag map, so exports are
-    # self-contained (no manual hub upload needed).
+    # The deploy Predictor expects a 4-file model dir; fill categories for
+    # every tag so exports are self-contained (no manual hub upload needed).
+    if verbose:
+        print("Generating tag_category.json …")
     try:
-        from tools.prebuild_cache import prebuild
-        if verbose:
-            print("Generating tag_category.json …")
-        prebuild(tag_map_path)
+        _build_tag_category(tag_to_id, model_dir, verbose=verbose)
     except Exception as exc:
         if verbose:
-            print(f"Warning: could not prebuild tag categories: {exc}")
+            print(f"Warning: could not build tag categories: {exc}")
         print("  (tag_to_id.json + config.json still written; "
               "tag_category.json is required by the deploy Predictor)")
 
