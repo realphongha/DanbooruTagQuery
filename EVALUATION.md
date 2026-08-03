@@ -22,15 +22,15 @@ All models evaluated on the same **custom intersection evaluation set**: 3383 ta
 
 ### Comparison Table — Intersection (3383 tags)
 
-| Model | Params | Input | Latency | mAP | Macro F1 | Micro F1 | Thresh |
+| Model | Params | Input | Latency | mAP | Macro F1 | Micro F1 | Best threshold |
 |---|---|---|---|---|---|---|---|
-| **Ours (L/16)** | 319.0M | 448×448 | 36.6ms | **0.5352** | **0.4775** | **0.6884** | 0.20 |
-| **Ours (B/16)** | 96.8M | 448×448 | 24.9ms | 0.4693 | 0.4195 | 0.6684 | 0.20 |
-| DeepDanbooru | 161.0M | 512×512 | 33.6ms | 0.2100 | 0.1920 | 0.4692 | 0.15 |
+| **Ours (L/16) - trained from scratch** | 319.0M | 448×448 | 36.6ms | **0.5352** | **0.4775** | **0.6884** | 0.20 |
 | WD-eva02 | 315.2M | 448×448 | 50.3ms | 0.4822 | 0.4344 | 0.6684 | 0.30 |
+| **Ours (B/16) - trained from scratch** | 96.8M | 448×448 | 24.9ms | 0.4693 | 0.4195 | 0.6684 | 0.20 |
 | WD-SwinV2 | 98.0M | 448×448 | 35.8ms | 0.4603 | 0.4140 | 0.6474 | 0.15 |
 | ML-Danbooru | 68.9M | 448×448 | 34.0ms | 0.4023 | 0.3490 | 0.5952 | 0.60 |
 | JoyTag | 91.5M | 448×448 | 20.2ms | 0.3783 | 0.3429 | 0.6179 | 0.35 |
+| DeepDanbooru (CNN) | 161.0M | 512×512 | 33.6ms | 0.2100 | 0.1920 | 0.4692 | 0.15 |
 
 ### Key Results
 
