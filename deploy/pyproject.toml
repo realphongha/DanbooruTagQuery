@@ -3,7 +3,7 @@ name = "danbooru-deploy"
 version = "0.1.0"
 description = "DanbooruTagQuery ONNX deployment: predictor, preprocessing, and Gradio UI."
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "onnxruntime>=1.18.0",
     "numpy>=1.20.0",
