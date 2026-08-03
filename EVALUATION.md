@@ -4,10 +4,10 @@
 
 | Metric | Definition |
 |---|---|
-| **mAP** | Mean Average Precision across all tags. For each tag, AP is the area under the precision-recall curve. mAP is the unweighted mean. Primary ranking metric. |
-| **Macro F1** | Unweighted mean of per-tag F1 scores, computed at a fixed threshold. Treats rare and frequent tags equally. |
-| **Micro F1** | Global F1 computed from aggregated TP/FP/FN across all tags. Dominated by frequent tags. |
-| **Thresh** | Confidence threshold used for Macro/Micro F1 computation (sigmoid output > threshold → positive). |
+| **mAP** | Mean Average Precision across all tags. AP per tag = area under the precision-recall curve. Final score = `nanmean` (tags with zero ground-truth positives excluded). Computed via batched CUDA sort. Primary ranking metric. |
+| **Macro F1** | Unweighted mean of per-tag F1 scores. Threshold searched over `[0.10, 0.15, …, 0.95]` (step 0.05); reported value uses the threshold that maximizes Macro F1. |
+| **Micro F1** | Global F1 from aggregated TP/FP/FN across all tags. Reported at the same best-Macro-F1 threshold — not independently optimized. |
+| **Thresh** | The threshold from the search grid that maximizes Macro F1. Both Macro F1 and Micro F1 are computed at this single value. |
 
 ## Comparison Methodology
 
@@ -16,7 +16,7 @@ All models evaluated on the same **custom intersection evaluation set**: 3383 ta
 - **Input resolution** listed per model — where models differ (DeepDanbooru at 512×512 vs 448×448), we use each model's native resolution.
 - **Latency** measured on a single NVIDIA RTX 4090 (PyTorch eager, batch size 1, CUDA timing). ONNX runtime used for ONNX-exported models.
 - **Best checkpoint** selected by validation mAP during training.
-- **Threshold** for each model is the value that maximizes Macro F1 on the intersection set, reported for reference.
+- **Threshold** searched over `[0.10, 0.15, …, 0.95]` (step 0.05). Best value maximizes Macro F1. Micro F1 reported at the same threshold — not independently optimized.
 
 ## Results
 
@@ -40,10 +40,12 @@ All models evaluated on the same **custom intersection evaluation set**: 3383 ta
 
 ### Baseline Models
 
-| Model | Architecture | Link |
-|---|---|---|
-| DeepDanbooru | GoogLeNet (ResNet-like CNN) | [Konaki4547/DeepDanbooru](https://github.com/Konaki4547/DeepDanbooru) |
-| WD-eva02 | EVA-02 Large ViT + MLP head | [SmilingWolf/wd-eva02-large-tagger-v3](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3) |
-| WD-SwinV2 | SwinV2-Tiny + MLP head | [SmilingWolf/wd-swinv2-small-tagger-v3](https://huggingface.co/SmilingWolf/wd-swinv2-small-tagger-v3) |
-| ML-Danbooru | CNN ensemble | [lloydmeta/deepdanbooru](https://github.com/lloydmeta/deepdanbooru) (ML-Danbooru fork) |
-| JoyTag | ConvNeXt + MLP | [AlicUpup/joymodel-tagger](https://github.com/AlicUpup/joymodel-tagger) |
+All baseline implementations live in [`src/compared_models/`](src/compared_models/). Each implements the `BaseModel` interface (`name`, `tag_names`, `load()`, `predict()`).
+
+| Model | Architecture | Implementation | Source |
+|---|---|---|---|
+| DeepDanbooru | ResNet (custom variant, TorchDeepDanbooru port) | [`deepdanbooru.py`](src/compared_models/deepdanbooru.py) — custom PyTorch model def | [AUTOMATIC1111/TorchDeepDanbooru](https://github.com/AUTOMATIC1111/TorchDeepDanbooru) |
+| WD-eva02 | EVA-02 Large ViT + MLP head (via timm) | [`wd_tagger.py`](src/compared_models/wd_tagger.py) — `WDTagger("eva02-large")` | [SmilingWolf/wd-eva02-large-tagger-v3](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3) |
+| WD-SwinV2 | SwinV2-Tiny + MLP head (via timm) | [`wd_tagger.py`](src/compared_models/wd_tagger.py) — `WDTagger("swinv2")` | [SmilingWolf/wd-swinv2-tagger-v3](https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3) |
+| ML-Danbooru | CAFormer-M36 + ONNX Runtime | [`ml_danbooru.py`](src/compared_models/ml_danbooru.py) — pure ONNX inference | [deepghs/ml-danbooru-onnx](https://huggingface.co/deepghs/ml-danbooru-onnx) |
+| JoyTag | ViT-B/16 + MLP head | [`joytag.py`](src/compared_models/joytag.py) — original `Models.py` via `VisionModel` | [fancyfeast/joytag](https://huggingface.co/fancyfeast/joytag) |
