@@ -42,6 +42,33 @@ model_dir/
 
 Or pass the `model.onnx` file path directly.
 
+## Quick start
+
+Auto-download default model from HF hub and launch the web UI (CPU):
+
+```bash
+pip install "git+...danbooru-deploy"
+danbooru-deploy --cpu
+```
+
+Run the web UI against a local model (CUDA if available):
+
+```bash
+danbooru-deploy path/to/model_dir
+```
+
+Force CPU for the UI:
+
+```bash
+danbooru-deploy --cpu path/to/model_dir
+```
+
+Tag a single image, print top-20:
+
+```bash
+danbooru-deploy path/to/model_dir image.jpg
+```
+
 ## Usage
 
 ```python
