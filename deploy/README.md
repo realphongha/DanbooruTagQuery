@@ -44,30 +44,28 @@ Or pass the `model.onnx` file path directly.
 
 ## Quick start
 
-Auto-download default model from HF hub and launch the web UI (CPU):
+Run straight from the repo (no pip install of the package needed):
 
 ```bash
-pip install "git+...danbooru-deploy"
+uv run python deploy/main.py --cpu     # CPU; omit --cpu → CUDA-if-available
+```
+
+Examples:
+
+```bash
+python deploy/main.py --cpu                      # hub default model, web UI, CPU
+python deploy/main.py path/to/model_dir         # local model dir, auto-CUDA UI
+python deploy/main.py path/to/model_dir img.jpg # tag a single image
+```
+
+Or pip-install and use the `danbooru-deploy` console script (identical CLI):
+
+```bash
+pip install "git+https://github.com/realphongha/DanbooruTagQuery.git#subdirectory=deploy[hf]"
 danbooru-deploy --cpu
 ```
 
-Run the web UI against a local model (CUDA if available):
-
-```bash
-danbooru-deploy path/to/model_dir
-```
-
-Force CPU for the UI:
-
-```bash
-danbooru-deploy --cpu path/to/model_dir
-```
-
-Tag a single image, print top-20:
-
-```bash
-danbooru-deploy path/to/model_dir image.jpg
-```
+Hub auto-download (no model arg) needs `huggingface_hub` installed — `uv add huggingface_hub` or the `[hf]` extra. Local models need nothing extra.
 
 ## Usage
 
