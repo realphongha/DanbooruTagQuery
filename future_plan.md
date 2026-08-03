@@ -1,1 +1,2 @@
+- [ ] Try KD + Transfer Learning to smaller models.
 - [ ] Another self-attention block for the head => more semantic for the tags.
