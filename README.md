@@ -13,10 +13,9 @@ Input image (448×448)
     │
     ▼
 ┌─────────────────────┐
-│   DINOv3 ViT-L/16   │  pretrained backbone, num_classes=0
-│   (forward_features)│
+│        DINOv3       │  pretrained ViT backbone│
 └─────────┬───────────┘
-          │  tokens: (B, N_patches+1, D)
+          │  tokens: (B, N_patches+5, D)
           ▼
 ┌─────────────────────┐
 │   Tag Query Head    │
