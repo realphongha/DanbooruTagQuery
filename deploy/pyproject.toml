@@ -13,6 +13,7 @@ dependencies = [
 
 [project.optional-dependencies]
 gpu = ["onnxruntime-gpu>=1.28.0"]
+hf = ["huggingface-hub>=0.20"]
 
 [project.scripts]
 danbooru-deploy = "danbooru_deploy.cli:main"

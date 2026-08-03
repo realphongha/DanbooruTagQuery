@@ -1,16 +1,35 @@
 """Gradio web UI for DanbooruTagQuery inference.
 
-Uses tag_category.json sidecar — no SQLite, no API calls.
+Uses tag_category.json sidecar — no SQLite, no API calls. Supports an
+optional runtime model switcher (HF hub variants) and a harmless ZeroGPU
+marker for Hugging Face Spaces (MockSpaces stub when ``spaces`` absent).
 """
 
 from __future__ import annotations
 
 import tempfile
+import time
 
 import gradio as gr
 from PIL import Image
 
 from .core import CATEGORY_MAP, get_category_name
+
+try:
+    import spaces
+except ImportError:
+    class MockSpaces:
+        def GPU(self, func=None, **kwargs):
+            if func is not None and callable(func):
+                # Used as @spaces.GPU
+                return func
+
+            # Used as @spaces.GPU(...)
+            def decorator(f):
+                return f
+            return decorator
+
+    spaces = MockSpaces()
 
 DEFAULT_TOP_K = None
 DEFAULT_MIN_SCORE = 0.2
@@ -29,12 +48,19 @@ def enrich_tags(
     for tag, score in tags_scores:
         result[tag] = {
             "score": score,
+            "category": cat_map.get(tag, 0),
             "category_name": get_category_name(cat_map, tag),
         }
     return result
 
 
-def build_app(predict_fn, cat_map: dict[str, int]):
+def build_app(
+    predict_fn,
+    cat_map: dict[str, int],
+    model_choices: list[str] | None = None,
+    get_model_predict_fn=None,
+    hf_repo: str | None = None,
+):
     """Build Gradio app.
 
     Parameters
@@ -44,11 +70,20 @@ def build_app(predict_fn, cat_map: dict[str, int]):
         Returns [(tag, score), …] sorted by score descending.
     cat_map : dict[str, int]
         tag -> category_id mapping from tag_category.json.
+    model_choices : list[str] | None
+        Model variant names for the switcher dropdown. None → no switcher.
+    get_model_predict_fn : callable | None
+        ``get_model_predict_fn(variant) -> (predict_fn, cat_map)`` used by the
+        model switcher at runtime. Required when model_choices is given.
+    hf_repo : str | None
+        Model card link target (defaults to no card when None).
     """
     state = {
         "all_logits": None,
         "tag_metadata": None,
         "current_image": None,
+        "predict_fn": predict_fn,
+        "cat_map": cat_map,
     }
 
     css = """
@@ -76,6 +111,22 @@ def build_app(predict_fn, cat_map: dict[str, int]):
                 with gr.Row():
                     analyze_btn = gr.Button("🔍 Analyze", variant="primary", scale=2)
                     clear_btn = gr.Button("🗑️ Clear", scale=1)
+                    if hf_repo:
+                        gr.Markdown(
+                            f'[📄 **Model Card**](https://huggingface.co/{hf_repo})'
+                        )
+
+                model_dropdown = None
+                model_status = None
+                if model_choices:
+                    gr.Markdown("### 🤖 Model")
+                    model_dropdown = gr.Dropdown(
+                        choices=model_choices,
+                        value=model_choices[0] if model_choices else None,
+                        label="Model variant",
+                        interactive=True,
+                    )
+                    model_status = gr.Markdown("Ready")
 
             with gr.Column(scale=1):
                 top_k = gr.Number(
@@ -138,14 +189,12 @@ def build_app(predict_fn, cat_map: dict[str, int]):
                 ]
 
             items = [(t, meta[t]["score"]) for t in all_tags]
-
             if _sort_by == "name":
                 items.sort(key=lambda x: format_tag(x[0], _use_underscore))
             else:
                 items.sort(key=lambda x: x[1], reverse=True)
 
             items = [(t, s) for t, s in items if s >= _min_score]
-
             if _top_k is not None and _top_k > 0:
                 items = items[:_top_k]
 
@@ -205,12 +254,14 @@ def build_app(predict_fn, cat_map: dict[str, int]):
                     return "<i>Error loading URL.</i>", "", f"❌ {exc}"
 
             state["current_image"] = pil
-            import time
-            t0 = time.time()
-            all_logits = predict_fn(pil)
-            state["all_logits"] = all_logits
+            fn = state["predict_fn"]
+            if fn is None:
+                return "<i>No model loaded.</i>", "", "❌ No model loaded."
 
-            state["tag_metadata"] = enrich_tags(all_logits, cat_map)
+            t0 = time.time()
+            all_logits = fn(pil)
+            state["all_logits"] = all_logits
+            state["tag_metadata"] = enrich_tags(all_logits, state["cat_map"])
 
             table, csv = refresh_results(
                 top_k.value, min_score.value,
@@ -291,10 +342,58 @@ def build_app(predict_fn, cat_map: dict[str, int]):
             }"""
         )
 
+        # HF ZeroGPU requires @spaces.GPU somewhere in code (harmless stub)
+        gpu_hidden_state = gr.State(value=None)
+
+        @spaces.GPU
+        def _gpu_dummy():
+            return None
+
+        gpu_hidden_state.change(
+            fn=_gpu_dummy, inputs=[gpu_hidden_state], outputs=[gpu_hidden_state]
+        )
+
+        # ── model switcher ────────────────────────────────────────────────
+
+        if model_dropdown is not None and get_model_predict_fn is not None:
+
+            def on_model_change(variant):
+                if not variant:
+                    return "⚠️ No model selected"
+                try:
+                    fn, cat = get_model_predict_fn(variant)
+                    state["predict_fn"] = fn
+                    state["cat_map"] = cat
+                    state["all_logits"] = None
+                    state["tag_metadata"] = None
+                    return f"✅ Switched to {variant}"
+                except Exception as exc:
+                    return f"❌ Failed to load model: {exc}"
+
+            model_dropdown.change(
+                fn=on_model_change,
+                inputs=[model_dropdown],
+                outputs=[model_status],
+            )
+
     return app
 
 
-def launch(predict_fn, cat_map: dict[str, int], share: bool = False, **kwargs):
+def launch(
+    predict_fn,
+    cat_map: dict[str, int],
+    share: bool = False,
+    model_choices: list[str] | None = None,
+    get_model_predict_fn=None,
+    hf_repo: str | None = None,
+    **kwargs,
+):
     """Launch Gradio UI with a predict function and category map."""
-    app = build_app(predict_fn, cat_map)
+    app = build_app(
+        predict_fn,
+        cat_map,
+        model_choices=model_choices,
+        get_model_predict_fn=get_model_predict_fn,
+        hf_repo=hf_repo,
+    )
     app.launch(share=share, **kwargs)
